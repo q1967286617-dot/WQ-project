@@ -4,8 +4,10 @@
 *.pkl
 
 outputs/
-!outputs/.gitkeep
 results/
+!outputs/.gitkeep
+!data/.gitkeep
+!models/.gitkeep
 
 __pycache__/
 .venv/
