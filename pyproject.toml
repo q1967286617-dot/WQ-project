@@ -1,0 +1,13 @@
+[project]
+name = "financial-event-prediction"
+version = "0.1.0"
+requires-python = ">=3.9"
+dependencies = [
+  "pandas",
+  "numpy",
+  "pyyaml",
+  "pyarrow",
+  "xgboost",
+  "scikit-learn",
+  "joblib",
+]

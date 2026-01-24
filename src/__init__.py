@@ -1,0 +1,1 @@
+"""Financial event prediction package."""

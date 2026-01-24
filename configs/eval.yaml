@@ -1,0 +1,16 @@
+H_label: 10
+H_eval: 10
+
+topk_list: [20, 50, 100]
+threshold: 0.7764
+cooldown_td: 10
+
+split:
+  train_start: "2010-01-01"
+  train_end:   "2022-12-31"
+  val_start:   "2023-01-01"
+  val_end:     "2023-12-31"
+  test_start:  "2024-01-01"
+  test_end:    "2024-12-31"
+
+embargo_td: 0

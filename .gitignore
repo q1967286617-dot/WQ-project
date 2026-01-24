@@ -1,0 +1,15 @@
+*.csv
+*.parquet
+*.joblib
+*.pkl
+
+outputs/
+!outputs/.gitkeep
+results/
+
+__pycache__/
+.venv/
+.env
+
+.vscode/
+.idea/

@@ -1,0 +1,6 @@
+tableA_path: data/raw/tableA.csv
+tableB_path: data/raw/tableB.csv
+
+processed_dir: data/processed
+models_dir: models
+outputs_dir: outputs/runs

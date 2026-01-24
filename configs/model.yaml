@@ -1,0 +1,43 @@
+date_col: DlyCalDt
+permno_col: PERMNO
+target_col: y_div_10d
+
+do_scale: True 
+
+hyperparams:
+  num_boost_round: 200
+  learning_rate: 0.05
+  max_depth: 5
+  early_stopping_rounds: 20
+
+num_cols:
+  - log_mkt_cap
+  - ret_21d
+  - vol_21d
+  - turnover_5d
+  - price_to_high
+  - ret_rel_to_ind
+  - days_since_last_div
+  - gap_mean_exp
+  - gap_med_exp
+  - gap_std_exp
+  - gap_mean_rN
+  - gap_std_rN
+  - gap_cv_exp
+  - time_to_med_exp
+  - z_to_med_exp
+  - time_to_mean_rN
+  - z_to_mean_rN
+  - div_count_exp
+  - weekday_sin
+  - weekday_cos
+  - month_sin
+  - month_cos
+  - doy_sin
+  - doy_cos
+
+cat_cols:
+  - quarter
+  - weekday
+  - is_month_start
+  - is_month_end
