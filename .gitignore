@@ -3,11 +3,13 @@
 *.joblib
 *.pkl
 
-outputs/
-results/
+outputs/*
+results/*
 !outputs/.gitkeep
 !data/.gitkeep
 !models/.gitkeep
+
+
 
 __pycache__/
 .venv/
