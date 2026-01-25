@@ -54,20 +54,22 @@ def load_market_data_full(table_b_path: Path, permno_set: set, start_all: str, e
 
 def load_div_events(
     table_a_path: Path,
+    DIV_DISTCD: list,
     permno_col: str = PERMNO_COL,
-    event_date_col: str = "DCLRDT",
+    event_date_col: str = "DCLRDT"
 ) -> pd.DataFrame:
     """
     Load dividend declaration events from tableA (default column: DCLRDT),
     then standardize dtype and sort.
     """
-    ev = pd.read_csv(table_a_path, usecols=[permno_col, event_date_col])
+    ev = pd.read_csv(table_a_path, usecols=[permno_col, event_date_col, "DISTCD"])
     ev[permno_col] = ev[permno_col].astype(int)
     ev[event_date_col] = pd.to_datetime(ev[event_date_col], errors="coerce")
 
     ev = ev.dropna(subset=[permno_col, event_date_col]).drop_duplicates()
     ev = ev.sort_values([permno_col, event_date_col]).reset_index(drop=True)
-    return ev
+    ev = ev[ev['DISTCD'].isin(DIV_DISTCD)]
+    return ev.drop(columns=['DISTCD'])
 
 def standardize_events(
     events_df: pd.DataFrame,
@@ -97,10 +99,12 @@ def main():
     START_ALL = data['start_all']
     END_ALL = data['end_all']
 
+    DIV_DISTCD = data['div_distcd']
+
     permno_set = build_fixed_universe(TABLE_B_PATH, START_ALL, END_ALL)
     df_full_raw = load_market_data_full(TABLE_B_PATH, permno_set, START_ALL, END_ALL)
 
-    div_ev = load_div_events(TABLE_A_PATH)
+    div_ev = load_div_events(TABLE_A_PATH, DIV_DISTCD)
 
     output_dir = Path("./data/interim/stage1")
     output_dir.mkdir(parents=True, exist_ok=True)

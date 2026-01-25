@@ -48,16 +48,16 @@ def _read_df(path: Path) -> pd.DataFrame:
 
 def main():
     ap = argparse.ArgumentParser()
+    ap.add_argument("--cfg", default="configs/config.yaml")
     ap.add_argument("--paths", default="configs/paths.yaml")
-    ap.add_argument("--eval_cfg", default="configs/eval.yaml")
     ap.add_argument("--run_id", required=True)
     ap.add_argument("--split", choices=["train", "val", "test"], default="val")
     ap.add_argument("--mode", choices=["threshold", "topk"], default="threshold")
     ap.add_argument("--k", type=int, default=50, help="Top-K for daily policy when mode=topk")
     args = ap.parse_args()
 
+    cfg       = load_yaml(Path(args.cfg))
     paths_cfg = load_yaml(Path(args.paths))
-    eval_cfg = load_yaml(Path(args.eval_cfg))
     paths = resolve_paths(paths_cfg, project_root=Path.cwd())
 
     run_dir = paths.outputs_dir / args.run_id
@@ -70,14 +70,15 @@ def main():
     eval_df = validate_eval_df(eval_df)
 
     # Load events
-    events_raw = load_div_events(paths.tableA_path, permno_col="PERMNO", event_date_col="DCLRDT")
+    DIV_DISTCD = cfg['div_distcd']
+    events_raw = load_div_events(paths.tableA_path, DIV_DISTCD=DIV_DISTCD, permno_col="PERMNO", event_date_col="DCLRDT")
     events_df = standardize_events(events_raw, permno_col="PERMNO", event_date_col="DCLRDT")
 
     eligible = filter_events_for_eval(eval_df, events_df)
 
-    H = int(eval_cfg.get("H_eval", eval_cfg.get("H_label", 10)))
-    threshold = float(eval_cfg.get("threshold", 0.5))
-    cooldown_td = int(eval_cfg.get("cooldown_td", 0))
+    H = int(cfg.get("H_eval", cfg.get("H_label", 10)))
+    threshold = float(cfg.get("threshold", 0.5))
+    cooldown_td = int(cfg.get("cooldown_td", 0))
 
     # Global metrics (row-level)
     gm = global_metrics(eval_df, threshold=threshold)
@@ -103,7 +104,7 @@ def main():
         summary["policy"] = f"daily_topk(k={args.k})"
 
     # Daily top-k report always useful (diagnostic); use k from config if present
-    k0 = int(eval_cfg.get("topk_list", [50])[0])
+    k0 = int(cfg.get("topk_list", [50])[0])
     daily = daily_topk_report(eval_df, k=k0)
 
     # Cadence & cohorts
