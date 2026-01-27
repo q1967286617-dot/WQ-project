@@ -13,6 +13,8 @@ python -m pip install pandas numpy pyyaml pyarrow xgboost scikit-learn joblib
 2) 准备处理后的数据（`data/processed` 目录下的 `train/val/test.parquet`）：
 ```bash
 # 训练
+python scripts/run_build_dataset.py --cfg configs/config.yaml
+
 python scripts/run_train.py --run_id <run_id>
 
 # 预测
@@ -123,6 +125,7 @@ python scripts/run_eval.py --run_id <run_id> --split test --mode topk --k 50
 
 评估（写入 `outputs/runs/<run_id>/eval/`）：
 - `summary.json`：全局与事件级汇总
+- `analysis_summary.json`：结构化分析摘要（包含 best/worst 股票 AUC-PR 及 full 统计对比）
 - `events_out.csv`：事件级命中表
 - `alerts_out.csv`：告警表
 - `daily_topk.csv`：每日 Top-K 指标
@@ -132,6 +135,9 @@ python scripts/run_eval.py --run_id <run_id> --split test --mode topk --k 50
 - `ops_daily.csv`：运营日度模拟
 - `event_recall_by_date.csv`：按事件日期的召回
 - `stock_cohorts.csv`：股票分组标签
+- `stock_cohorts_cutoff.csv`：截断版（仅使用 eval 起始日前的事件统计）
+- `stock_cohorts_full.csv`：全历史版（使用全历史事件统计）
+- `stock_aucpr_best_worst.csv`：AUC-PR 最好/最差各 10 支股票（包含 cutoff/full 两套字段）
 
 同时会输出：
 - `outputs/runs/<run_id>/preds/eval_df.parquet`

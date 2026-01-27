@@ -49,7 +49,6 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--paths", default="configs/paths.yaml")
     ap.add_argument("--model_cfg", default="configs/model.yaml")
-    ap.add_argument("--eval_cfg", default="configs/eval.yaml")
     ap.add_argument("--run_id", default=None)
     args = ap.parse_args()
 

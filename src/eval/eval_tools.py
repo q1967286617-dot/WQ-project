@@ -110,6 +110,108 @@ def per_stock_metrics(eval_df: pd.DataFrame) -> pd.DataFrame:
     return out
 
 
+def stock_aucpr_best_worst(
+    eval_df: pd.DataFrame,
+    stock_cohorts_cutoff: Optional[pd.DataFrame],
+    stock_cohorts_full: Optional[pd.DataFrame] = None,
+    top_n: int = 10,
+) -> pd.DataFrame:
+    """
+    Rank stocks by AUC-PR and return the best/worst N with key cohort stats.
+
+    We only rank stocks that have at least one positive label (n_pos > 0),
+    because AUC-PR is not meaningful otherwise.
+    """
+    metrics = per_stock_metrics(eval_df)
+    metrics = metrics[(metrics["n_pos"] > 0) & metrics["aucpr"].notna()].copy()
+    if metrics.empty:
+        return metrics
+
+    feat_cols = ["gap_cv", "gap_med", "n_events"]
+    base_permnos = pd.DataFrame({"permno": metrics["permno"].unique()})
+
+    def _prep_feats(cohorts: Optional[pd.DataFrame], suffix: str) -> pd.DataFrame:
+        if cohorts is None or cohorts.empty:
+            return base_permnos.copy()
+
+        keep = ["permno"] + [c for c in feat_cols if c in cohorts.columns]
+        f = cohorts[keep].copy()
+
+        rename_map = {c: f"{c}_{suffix}" for c in feat_cols if c in f.columns}
+        f = f.rename(columns=rename_map)
+
+        # Provide the requested div_count alias for each variant.
+        n_events_col = f"n_events_{suffix}"
+        div_count_col = f"div_count_{suffix}"
+        if n_events_col in f.columns and div_count_col not in f.columns:
+            f[div_count_col] = f[n_events_col]
+
+        return f
+
+    feats_cutoff = _prep_feats(stock_cohorts_cutoff, "cutoff")
+    feats_full = _prep_feats(stock_cohorts_full, "full")
+
+    merged = metrics.merge(feats_cutoff, on="permno", how="left")
+    merged = merged.merge(feats_full, on="permno", how="left")
+
+    n = int(max(top_n, 1))
+
+    worst = (
+        merged.sort_values(["aucpr", "n_pos", "n"], ascending=[True, False, False])
+        .head(n)
+        .reset_index(drop=True)
+    )
+    worst["rank_group"] = "worst"
+    worst["rank_in_group"] = worst.index + 1
+
+    best = (
+        merged.sort_values(["aucpr", "n_pos", "n"], ascending=[False, False, False])
+        .head(n)
+        .reset_index(drop=True)
+    )
+    best["rank_group"] = "best"
+    best["rank_in_group"] = best.index + 1
+
+    cols_front = ["rank_group", "rank_in_group", "permno", "aucpr", "auc", "n", "n_pos", "pos_rate"]
+    cols_feat = [
+        c
+        for c in [
+            "gap_cv_cutoff",
+            "gap_med_cutoff",
+            "div_count_cutoff",
+            "n_events_cutoff",
+            "gap_cv_full",
+            "gap_med_full",
+            "div_count_full",
+            "n_events_full",
+        ]
+        if c in merged.columns
+    ]
+    cols = cols_front + [c for c in cols_feat if c not in cols_front]
+
+    out = pd.concat([best[cols], worst[cols]], ignore_index=True)
+    # Keep "best" first, then "worst".
+    out["rank_group"] = pd.Categorical(out["rank_group"], categories=["best", "worst"], ordered=True)
+    out = out.sort_values(["rank_group", "rank_in_group"]).reset_index(drop=True)
+    out["rank_group"] = out["rank_group"].astype(str)
+
+    # Replace NaN with a readable token for cohort-style fields.
+    unknown_cols = [
+        "gap_cv_cutoff",
+        "gap_med_cutoff",
+        "div_count_cutoff",
+        "n_events_cutoff",
+        "gap_cv_full",
+        "gap_med_full",
+        "div_count_full",
+        "n_events_full",
+    ]
+    for c in unknown_cols:
+        if c in out.columns:
+            out[c] = out[c].where(~out[c].isna(), "unknown")
+    return out
+
+
 # -------------------------
 # Daily Top-K report + alerts
 # -------------------------

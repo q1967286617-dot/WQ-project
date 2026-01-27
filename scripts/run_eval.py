@@ -16,6 +16,7 @@ from src.data.load import load_div_events, standardize_events
 from src.eval.eval_tools import (
     validate_eval_df,
     global_metrics,
+    stock_aucpr_best_worst,
     daily_topk_report,
     make_daily_topk_alerts,
     filter_events_for_eval,
@@ -108,8 +109,16 @@ def main():
     daily = daily_topk_report(eval_df, k=k0)
 
     # Cadence & cohorts
-    cadence = compute_cadence_stats(events_df, cutoff_date=str(eval_df["date"].min()))
-    cohorts = build_stock_cohorts(eval_df, cadence)
+    cutoff_date = str(eval_df["date"].min())
+    cadence_cutoff = compute_cadence_stats(events_df, cutoff_date=cutoff_date)
+    cadence_full = compute_cadence_stats(events_df, cutoff_date=None)
+
+    cohorts = build_stock_cohorts(eval_df, cadence_cutoff)
+    cohorts_full = build_stock_cohorts(eval_df, cadence_full)
+
+    stock_best_worst = stock_aucpr_best_worst(
+        eval_df, stock_cohorts_cutoff=cohorts, stock_cohorts_full=cohorts_full, top_n=10
+    )
 
     cohort_cols = [
         "bucket_n_events",
@@ -143,11 +152,14 @@ def main():
         censoring_diag=censor_diag,
         phase_tab=phase_tab,
         summary=full_summary,
+        stock_aucpr_best_worst=stock_best_worst,
     )
 
     ops_daily.to_csv(run_dir / "eval" / "ops_daily.csv", index=False)
     er_daily.to_csv(run_dir / "eval" / "event_recall_by_date.csv", index=False)
     cohorts.to_csv(run_dir / "eval" / "stock_cohorts.csv", index=False)
+    cohorts.to_csv(run_dir / "eval" / "stock_cohorts_cutoff.csv", index=False)
+    cohorts_full.to_csv(run_dir / "eval" / "stock_cohorts_full.csv", index=False)
 
     logger.info(f"wrote eval outputs under: {run_dir/'eval'}")
 

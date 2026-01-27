@@ -11,7 +11,7 @@ H_label: 10
 H_eval: 20
 
 topk_list: [20, 50, 100]
-threshold: 0.7764
+threshold: 0.5
 cooldown_td: 10
 
 start_all: "2010-01-01"
@@ -19,10 +19,10 @@ end_all: "2024-12-31"
 
 split:
   train_start: "2010-01-01"
-  train_end:   "2021-12-31"
-  val_start:   "2022-01-01"
-  val_end:     "2022-12-31"
-  test_start:  "2023-01-01"
+  train_end:   "2011-12-31"
+  val_start:   "2012-01-01"
+  val_end:     "2014-12-31"
+  test_start:  "2015-01-01"
   test_end:    "2024-12-31"
 
 embargo_td: 10
