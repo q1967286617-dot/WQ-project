@@ -53,7 +53,7 @@ def main():
         raise FileNotFoundError(f"Missing artifacts: {art_path}")
 
     # Keep extra columns for cohorting if present
-    keep = ["log_mkt_cap", "turnover_5d", "vol_21d", "SICCD", "industry"]
+    keep = ["log_mkt_cap", "turnover_5d", "vol_21d", "SICCD", "industry", "has_div_history"]
     eval_df = predict_to_eval_df(df, art_path, keep_extra_cols=keep)
 
     out_path = run_dir / "preds" / f"{args.split}_preds.parquet"
