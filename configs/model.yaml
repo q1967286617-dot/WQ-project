@@ -12,10 +12,16 @@ hyperparams:
 
 num_cols:
   - log_mkt_cap
+  - ret_5d
   - ret_21d
+  - vol_5d
   - vol_21d
   - turnover_5d
+  - turnover_21d
   - price_to_high
+  - volume_spike
+  - vol_ratio
+  - turnover_ratio
   - ret_rel_to_ind
   - days_since_last_div
   - gap_mean_exp
