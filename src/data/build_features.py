@@ -121,10 +121,16 @@ def build_causal_features_full(df_full: pd.DataFrame, div_ev: pd.DataFrame, div_
 
     df["log_mkt_cap"] = np.log(df["DlyPrc"].abs() * df["ShrOut"] + 1)
 
+    df["ret_5d"] = g["DlyRet"].transform(lambda s: s.rolling(5).sum())
     df["ret_21d"] = g["DlyRet"].transform(lambda s: s.rolling(21).sum())
+    df["vol_5d"] = g["DlyRet"].transform(lambda s: s.rolling(5).std())
     df["vol_21d"] = g["DlyRet"].transform(lambda s: s.rolling(21).std())
     df["turnover_5d"] = (df["DlyVol"] / df["ShrOut"]).groupby(df[PERMNO_COL]).transform(lambda s: s.rolling(5).mean())
+    df["turnover_21d"] = (df["DlyVol"] / df["ShrOut"]).groupby(df[PERMNO_COL]).transform(lambda s: s.rolling(21).mean())
     df["price_to_high"] = df["DlyPrc"] / g["DlyPrc"].transform(lambda s: s.rolling(5).max())
+    df["volume_spike"] = df["DlyVol"] / g["DlyVol"].transform(lambda s: s.rolling(21).mean())
+    df["vol_ratio"] = df["vol_5d"] / (df["vol_21d"] + eps)
+    df["turnover_ratio"] = df["turnover_5d"] / (df["turnover_21d"] + eps)
 
     # 5) 行业横截面特征（当日 SIC 两位行业的平均收益）
     df["industry"] = df["SICCD"].fillna(0).astype(str).str[:2]
