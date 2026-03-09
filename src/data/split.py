@@ -1,13 +1,12 @@
 from __future__ import annotations
 
-from typing import Tuple
-
-from pathlib import Path
+from typing import Dict, Tuple
 import yaml
 
 import pandas as pd
 
-from load import PERMNO_COL, DATE_COL
+from . import CONFIG_DIR, DATA_DIR
+from .load import PERMNO_COL, DATE_COL
 
 def split_by_date(df: pd.DataFrame, split_days: Dict):
 
@@ -41,11 +40,11 @@ def purge_tail(df: pd.DataFrame, end_date: str, embargo_td: int):
     return x
 
 def main():
-    with open('./configs/config.yaml', 'r', encoding='utf-8') as f:
+    with open(CONFIG_DIR / "config.yaml", "r", encoding="utf-8") as f:
         # 使用 safe_load 避免执行任意代码，这是安全实践
         data = yaml.safe_load(f)
 
-    df_full_labeled = pd.read_parquet('./data/interim/stage3/df_full_labeled.parquet')
+    df_full_labeled = pd.read_parquet(DATA_DIR / "interim" / "stage3" / "df_full_labeled.parquet")
     
     train_df, val_df, test_df = split_by_date(df_full_labeled, data['split'])
 

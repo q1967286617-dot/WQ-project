@@ -1,0 +1,57 @@
+warning: in the working copy of 'scripts/run_predict.py', LF will be replaced by CRLF the next time Git touches it
+[1mdiff --git a/scripts/run_predict.py b/scripts/run_predict.py[m
+[1mindex 960fb40..82cd2b1 100644[m
+[1m--- a/scripts/run_predict.py[m
+[1m+++ b/scripts/run_predict.py[m
+[36m@@ -12,6 +12,7 @@[m [mimport pandas as pd[m
+ from src.utils.paths import load_yaml, resolve_paths, ensure_dir[m
+ from src.utils.logging import get_logger[m
+ from src.modeling.predict import predict_to_eval_df[m
+[32m+[m[32mfrom src.data.load import load_div_events[m
+ [m
+ [m
+ logger = get_logger("run_predict")[m
+[36m@@ -30,12 +31,14 @@[m [mdef _read_df(path: Path) -> pd.DataFrame:[m
+ [m
+ def main():[m
+     ap = argparse.ArgumentParser()[m
+[32m+[m[32m    ap.add_argument("--cfg", default="configs/config.yaml")[m
+     ap.add_argument("--paths", default="configs/paths.yaml")[m
+     ap.add_argument("--run_id", required=True)[m
+     ap.add_argument("--split", choices=["train", "val", "test"], default="val")[m
+     ap.add_argument("--model_artifacts", default=None, help="Override artifacts path; otherwise inferred from models/xgb_<run_id>.joblib")[m
+     args = ap.parse_args()[m
+ [m
+[32m+[m[32m    cfg = load_yaml(Path(args.cfg))[m
+     paths_cfg = load_yaml(Path(args.paths))[m
+     paths = resolve_paths(paths_cfg, project_root=Path.cwd())[m
+ [m
+[36m@@ -56,6 +59,28 @@[m [mdef main():[m
+     keep = ["log_mkt_cap", "turnover_5d", "vol_21d", "SICCD", "industry"][m
+     eval_df = predict_to_eval_df(df, art_path, keep_extra_cols=keep)[m
+ [m
+[32m+[m[32m    # Post-process: for stocks with <=1 dividend events before test start, zero out predictions.[m
+[32m+[m[32m    if args.split == "test":[m
+[32m+[m[32m        split_cfg = cfg.get("split", {})[m
+[32m+[m[32m        test_start_raw = split_cfg.get("test_start")[m
+[32m+[m[32m        test_start = pd.to_datetime(test_start_raw) if test_start_raw else pd.to_datetime(df["DlyCalDt"].min())[m
+[32m+[m
+[32m+[m[32m        div_distcd = cfg.get("div_distcd", [])[m
+[32m+[m[32m        if not div_distcd:[m
+[32m+[m[32m            raise ValueError("div_distcd is missing in configs/config.yaml; required for dividend event filtering.")[m
+[32m+[m
+[32m+[m[32m        events = load_div_events(paths.tableA_path, DIV_DISTCD=div_distcd, permno_col="PERMNO", event_date_col="DCLRDT")[m
+[32m+[m[32m        events = events[events["DCLRDT"] < test_start][m
+[32m+[m[32m        div_counts = events["PERMNO"].value_counts()[m
+[32m+[m
+[32m+[m[32m        # permnos with 0 or 1 dividend events before test_start[m
+[32m+[m[32m        mask = eval_df["permno"].map(lambda p: div_counts.get(p, 0) <= 1)[m
+[32m+[m[32m        affected_rows = int(mask.sum())[m
+[32m+[m[32m        affected_permnos = int(eval_df.loc[mask, "permno"].nunique())[m
+[32m+[m[32m        if affected_rows > 0:[m
+[32m+[m[32m            eval_df.loc[mask, "prob"] = 0.0[m
+[32m+[m[32m        logger.info(f"zeroed predictions for {affected_permnos} permnos ({affected_rows} rows) with <=1 dividend events before {test_start.date()}")[m
+[32m+[m
+     out_path = run_dir / "preds" / f"{args.split}_preds.parquet"[m
+     try:[m
+         eval_df.to_parquet(out_path, index=False)[m

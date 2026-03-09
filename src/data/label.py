@@ -2,13 +2,13 @@ from __future__ import annotations
 
 from typing import Dict, Any
 
-from pathlib import Path
 import yaml
 
 import numpy as np
 import pandas as pd
 
-from load import PERMNO_COL, DATE_COL
+from . import CONFIG_DIR, DATA_DIR
+from .load import PERMNO_COL, DATE_COL
 
 
 def build_event_dict(events: pd.DataFrame, date_col: str):
@@ -46,14 +46,14 @@ def label_within_h_trading_days(df: pd.DataFrame, event_dict: dict, h: int, labe
     return x.drop(columns=["t_end"])
 
 def main():
-    with open('./configs/config.yaml', 'r', encoding='utf-8') as f:
+    with open(CONFIG_DIR / "config.yaml", "r", encoding="utf-8") as f:
         # 使用 safe_load 避免执行任意代码，这是安全实践
         data = yaml.safe_load(f)
     
     H_DIV = data['H_label']
 
-    div_ev = pd.read_parquet('./data/interim/stage1/div_ev.parquet')
-    df_full_feat = pd.read_parquet('./data/interim/stage2/df_full_feat.parquet')
+    div_ev = pd.read_parquet(DATA_DIR / "interim" / "stage1" / "div_ev.parquet")
+    df_full_feat = pd.read_parquet(DATA_DIR / "interim" / "stage2" / "df_full_feat.parquet")
 
     div_dict = build_event_dict(div_ev, "DCLRDT")
     df_full_labeled = label_within_h_trading_days(df_full_feat, div_dict, h=H_DIV, label_name="y_div_10d")

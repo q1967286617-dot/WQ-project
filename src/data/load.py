@@ -9,6 +9,8 @@ import yaml
 
 import joblib
 
+from . import CONFIG_DIR, DATA_DIR, PROJECT_ROOT
+
 PERMNO_COL = "PERMNO"
 DATE_COL = "DlyCalDt"
 
@@ -89,12 +91,12 @@ def standardize_events(
     return ev
 
 def main():
-    with open('./configs/config.yaml', 'r', encoding='utf-8') as f:
+    with open(CONFIG_DIR / "config.yaml", "r", encoding="utf-8") as f:
         # 使用 safe_load 避免执行任意代码，这是安全实践
         data = yaml.safe_load(f)
     
-    TABLE_A_PATH = "./" + data['tableA_path']
-    TABLE_B_PATH = "./" + data['tableB_path']
+    TABLE_A_PATH = PROJECT_ROOT / data["tableA_path"]
+    TABLE_B_PATH = PROJECT_ROOT / data["tableB_path"]
 
     START_ALL = data['start_all']
     END_ALL = data['end_all']

@@ -2,12 +2,11 @@ from __future__ import annotations
 
 from typing import Optional
 
-from pathlib import Path
-
 import numpy as np
 import pandas as pd
 
-from load import PERMNO_COL, DATE_COL
+from . import DATA_DIR
+from .load import PERMNO_COL, DATE_COL
 
 
 def add_calendar_features(df: pd.DataFrame):
@@ -145,13 +144,14 @@ def build_causal_features_full(df_full: pd.DataFrame, div_ev: pd.DataFrame, div_
 
 
 def main():
-    div_ev = pd.read_parquet('./data/interim/stage1/div_ev.parquet')
-    df_full_raw = pd.read_parquet('./data/interim/stage1/df_full_raw.parquet')
+    stage1_dir = DATA_DIR / "interim" / "stage1"
+    div_ev = pd.read_parquet(stage1_dir / "div_ev.parquet")
+    df_full_raw = pd.read_parquet(stage1_dir / "df_full_raw.parquet")
     
     div_event_feats = build_div_event_features(div_ev, recent_n=3)
     df_full_feat = build_causal_features_full(df_full_raw, div_ev, div_event_feats)
 
-    output_dir = Path("./data/interim/stage2")
+    output_dir = DATA_DIR / "interim" / "stage2"
     output_dir.mkdir(parents=True, exist_ok=True)
 
     div_event_feats.to_parquet(output_dir / 'div_event_feats.parquet', index=False)
