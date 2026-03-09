@@ -9,6 +9,7 @@ import argparse
 from pathlib import Path
 from typing import Dict, List
 
+
 import pandas as pd
 
 from src.backtest.benchmark import build_equal_weight_benchmark
@@ -16,6 +17,7 @@ from src.backtest.portfolio import simulate_portfolio
 from src.backtest.report import build_trade_attribution, enrich_daily_report, summarize_backtest, write_backtest_outputs
 from src.backtest.signal import add_execution_returns, add_forward_returns, build_backtest_panel, build_daily_candidates, compute_stable_gap_cv_threshold, infer_execution_basis, merge_execution_price_data, run_signal_research
 from src.modeling.predict import predict_to_eval_df
+
 from src.utils.logging import get_logger
 from src.utils.paths import load_yaml, resolve_paths
 
@@ -25,7 +27,6 @@ logger = get_logger("run_backtest")
 
 KEEP_EXTRA_COLS = ["log_mkt_cap", "turnover_5d", "vol_21d", "SICCD", "industry", "has_div_history"]
 RAW_PRICE_COLS = ["PERMNO", "DlyCalDt", "DlyOpen", "DlyClose", "DlyHigh", "DlyLow", "DlyBid", "DlyAsk"]
-
 
 def _read_df(path: Path) -> pd.DataFrame:
     if path.suffix.lower() == ".parquet":
@@ -76,6 +77,7 @@ def threshold_reference_split_names(target_split: str) -> List[str]:
 def _load_named_splits(processed_dir: Path, split_names: List[str]) -> pd.DataFrame:
     parts = []
     for name in split_names:
+
         path = processed_dir / f"{name}.parquet"
         if path.exists():
             parts.append(_read_df(path))
