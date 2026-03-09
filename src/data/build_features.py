@@ -157,7 +157,7 @@ def main():
     div_event_feats.to_parquet(output_dir / 'div_event_feats.parquet', index=False)
     df_full_feat.to_parquet(output_dir / 'df_full_feat.parquet', index=False)
 
-    print(f"文件已成功保存至: {output_dir}")
+    print(f"Features built: {output_dir}")
 
 if __name__ == "__main__":
     main()
