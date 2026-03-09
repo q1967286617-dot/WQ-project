@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Dict
+from typing import Dict, Optional
 
 import numpy as np
 import pandas as pd
@@ -21,8 +21,13 @@ def enrich_daily_report(daily_df: pd.DataFrame, benchmark_df: pd.DataFrame) -> p
     return x
 
 
-def summarize_backtest(daily_df: pd.DataFrame, trades_df: pd.DataFrame, research_decision: Dict) -> Dict:
-    return {
+def summarize_backtest(
+    daily_df: pd.DataFrame,
+    trades_df: pd.DataFrame,
+    research_decision: Dict,
+    cost_model: Optional[Dict] = None,
+) -> Dict:
+    out = {
         "n_days": int(len(daily_df)),
         "avg_positions": float(daily_df["n_positions"].mean()) if len(daily_df) else 0.0,
         "avg_turnover": float(daily_df["turnover"].mean()) if len(daily_df) else 0.0,
@@ -46,6 +51,9 @@ def summarize_backtest(daily_df: pd.DataFrame, trades_df: pd.DataFrame, research
         },
         "research_decision": research_decision,
     }
+    if cost_model is not None:
+        out["cost_model"] = cost_model
+    return out
 
 
 def build_trade_attribution(trades_df: pd.DataFrame) -> Dict[str, pd.DataFrame]:

@@ -24,6 +24,8 @@ REQUIRED_SPLIT_COLS = (
     "z_to_med_exp",
     "y_div_10d",
 )
+BACKTEST_PANEL_COLS = tuple(c for c in REQUIRED_SPLIT_COLS if c not in {"DlyCalDt", "PERMNO"})
+RAW_PRICE_COLS = ("DlyOpen", "DlyClose", "DlyHigh", "DlyLow", "DlyBid", "DlyAsk")
 
 
 @dataclass(frozen=True)
@@ -58,18 +60,80 @@ def build_backtest_panel(preds_df: pd.DataFrame, split_df: pd.DataFrame) -> pd.D
         right_on=["DlyCalDt", "PERMNO"],
         how="left",
         validate="one_to_one",
+        suffixes=("", "__split"),
     )
     merged = merged.drop(columns=["DlyCalDt", "PERMNO"])
+
+    for col in BACKTEST_PANEL_COLS:
+        split_col = f"{col}__split"
+        if split_col in merged.columns:
+            if col in merged.columns:
+                merged[col] = merged[col].where(merged[col].notna(), merged[split_col])
+                merged = merged.drop(columns=[split_col])
+            else:
+                merged = merged.rename(columns={split_col: col})
+
+    _require_columns(merged, REQUIRED_PRED_COLS + BACKTEST_PANEL_COLS, "backtest_panel")
     return merged.sort_values(["date", "permno"]).reset_index(drop=True)
+
+
+def merge_execution_price_data(panel: pd.DataFrame, raw_price_df: pd.DataFrame) -> pd.DataFrame:
+    if raw_price_df.empty:
+        return panel
+
+    required = ("date", "permno") + RAW_PRICE_COLS
+    _require_columns(raw_price_df, required, "raw_price_df")
+
+    raw = raw_price_df.copy()
+    raw["date"] = pd.to_datetime(raw["date"], errors="coerce")
+    raw["permno"] = raw["permno"].astype(int)
+
+    x = panel.copy()
+    merged = x.merge(raw[list(required)], on=["date", "permno"], how="left", suffixes=("", "__raw"))
+    for col in RAW_PRICE_COLS:
+        raw_col = f"{col}__raw"
+        if raw_col in merged.columns:
+            if col in merged.columns:
+                merged[col] = merged[col].where(merged[col].notna(), merged[raw_col])
+                merged = merged.drop(columns=[raw_col])
+            else:
+                merged = merged.rename(columns={raw_col: col})
+    return merged
+
+
+def infer_execution_basis(panel: pd.DataFrame) -> str:
+    if "DlyOpen" in panel.columns and pd.to_numeric(panel["DlyOpen"], errors="coerce").notna().any():
+        return "open_to_open"
+    return "close_to_close_delayed"
+
+
+def add_execution_returns(panel: pd.DataFrame) -> pd.DataFrame:
+    x = panel.copy().sort_values(["permno", "date"]).reset_index(drop=True)
+    basis = infer_execution_basis(x)
+    if basis == "open_to_open":
+        open_px = pd.to_numeric(x["DlyOpen"], errors="coerce").where(lambda s: s > 0)
+        x["exec_ret_1d"] = open_px.groupby(x["permno"]).pct_change(fill_method=None)
+    else:
+        x["exec_ret_1d"] = pd.to_numeric(x["DlyRet"], errors="coerce")
+    return x
 
 
 def add_forward_returns(
     panel: pd.DataFrame,
     horizons: Iterable[int] = (1, 5, 10),
-    ret_col: str = "DlyRet",
 ) -> pd.DataFrame:
     x = panel.copy().sort_values(["permno", "date"]).reset_index(drop=True)
-    gross = 1.0 + x[ret_col].fillna(0.0)
+    basis = infer_execution_basis(x)
+
+    if basis == "open_to_open":
+        open_px = pd.to_numeric(x["DlyOpen"], errors="coerce").where(lambda s: s > 0)
+        g = open_px.groupby(x["permno"])
+        for h in horizons:
+            col = f"fwd_ret_{int(h)}d"
+            x[col] = g.shift(-(int(h) + 1)) / g.shift(-1) - 1.0
+        return x
+
+    gross = 1.0 + pd.to_numeric(x["DlyRet"], errors="coerce").fillna(0.0)
     for h in horizons:
         col = f"fwd_ret_{int(h)}d"
         x[col] = (
@@ -261,6 +325,8 @@ def build_daily_candidates(
         "fwd_ret_5d",
         "fwd_ret_10d",
         "y_div_10d",
+        "DlyOpen",
+        "DlyClose",
     ]
     cols_front = [c for c in cols_front if c in out.columns]
     rest = [c for c in out.columns if c not in cols_front]

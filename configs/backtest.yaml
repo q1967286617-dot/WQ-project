@@ -13,3 +13,5 @@ stable_gap_cv_quantile: 0.5
 stable_prob_threshold: 0.45
 regular_prob_threshold: 0.55
 dividend_rules_mode: auto
+use_bid_ask_spread: true
+spread_cost_cap_bps_one_way: 100.0

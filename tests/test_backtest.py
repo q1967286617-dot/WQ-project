@@ -4,10 +4,11 @@ import unittest
 
 import pandas as pd
 
+from scripts.run_backtest import policy_split_names, threshold_reference_split_names
 from src.backtest.benchmark import build_equal_weight_benchmark
 from src.backtest.portfolio import simulate_portfolio
 from src.backtest.report import enrich_daily_report, summarize_backtest
-from src.backtest.signal import add_forward_returns, build_backtest_panel, build_daily_candidates, compute_stable_gap_cv_threshold
+from src.backtest.signal import add_execution_returns, add_forward_returns, build_backtest_panel, build_daily_candidates, compute_stable_gap_cv_threshold, infer_execution_basis, merge_execution_price_data
 
 
 class BacktestTests(unittest.TestCase):
@@ -19,6 +20,10 @@ class BacktestTests(unittest.TestCase):
         rets_a = [0.00, 0.10, 0.10, 0.00, 0.00, 0.00]
         rets_b = [0.00, 0.01, 0.01, 0.01, 0.00, 0.00]
         rets_c = [0.00, 0.02, -0.01, 0.01, 0.00, 0.00]
+        opens_a = [10.0, 10.0, 11.0, 12.1, 12.1, 12.1]
+        opens_b = [10.0, 10.0, 10.1, 10.201, 10.30301, 10.30301]
+        opens_c = [10.0, 10.2, 10.1, 10.0, 10.0, 10.0]
+        price_rows = []
         for i, dt in enumerate(dates):
             rows.extend(
                 [
@@ -72,7 +77,15 @@ class BacktestTests(unittest.TestCase):
                     },
                 ]
             )
+            price_rows.extend(
+                [
+                    {"date": dt, "permno": 1, "DlyOpen": opens_a[i], "DlyClose": opens_a[i], "DlyHigh": opens_a[i], "DlyLow": opens_a[i], "DlyBid": opens_a[i], "DlyAsk": opens_a[i]},
+                    {"date": dt, "permno": 2, "DlyOpen": opens_b[i], "DlyClose": opens_b[i], "DlyHigh": opens_b[i], "DlyLow": opens_b[i], "DlyBid": opens_b[i], "DlyAsk": opens_b[i]},
+                    {"date": dt, "permno": 3, "DlyOpen": opens_c[i], "DlyClose": opens_c[i], "DlyHigh": opens_c[i], "DlyLow": opens_c[i], "DlyBid": opens_c[i], "DlyAsk": opens_c[i]},
+                ]
+            )
         self.split_df = pd.DataFrame(rows)
+        self.price_df = pd.DataFrame(price_rows)
         pred_rows = []
         for i, dt in enumerate(dates):
             pred_rows.extend(
@@ -84,8 +97,31 @@ class BacktestTests(unittest.TestCase):
             )
         self.preds_df = pd.DataFrame(pred_rows)
 
+    def _panel(self) -> pd.DataFrame:
+        panel = build_backtest_panel(self.preds_df, self.split_df)
+        panel = merge_execution_price_data(panel, self.price_df)
+        panel = add_execution_returns(panel)
+        panel = add_forward_returns(panel, horizons=(1, 2, 3))
+        return panel
+
+    def test_split_reference_rules_are_time_safe(self) -> None:
+        self.assertEqual(policy_split_names("train"), [])
+        self.assertEqual(policy_split_names("val"), [])
+        self.assertEqual(policy_split_names("test"), ["val"])
+        self.assertEqual(threshold_reference_split_names("train"), [])
+        self.assertEqual(threshold_reference_split_names("val"), ["train"])
+        self.assertEqual(threshold_reference_split_names("test"), ["train", "val"])
+
+    def test_open_prices_switch_execution_basis(self) -> None:
+        panel = self._panel()
+        self.assertEqual(infer_execution_basis(panel), "open_to_open")
+        day2 = panel[(panel["permno"] == 1) & (panel["date"] == pd.Timestamp("2024-01-02"))].iloc[0]
+        self.assertAlmostEqual(float(day2["exec_ret_1d"]), 0.0, places=8)
+        day3 = panel[(panel["permno"] == 1) & (panel["date"] == pd.Timestamp("2024-01-03"))].iloc[0]
+        self.assertAlmostEqual(float(day3["exec_ret_1d"]), 0.10, places=8)
+
     def test_build_candidates_filters_and_industry_cap(self) -> None:
-        panel = add_forward_returns(build_backtest_panel(self.preds_df, self.split_df), horizons=(1, 2, 3))
+        panel = self._panel()
         threshold = compute_stable_gap_cv_threshold(self.split_df, stable_div_count_min=4, quantile=0.5)
         candidates = build_daily_candidates(
             panel=panel,
@@ -104,8 +140,8 @@ class BacktestTests(unittest.TestCase):
         self.assertEqual(day1["permno"].tolist(), [1])
         self.assertTrue((candidates["permno"] != 3).all())
 
-    def test_portfolio_respects_next_day_entry_and_holding(self) -> None:
-        panel = add_forward_returns(build_backtest_panel(self.preds_df, self.split_df), horizons=(1, 2, 3))
+    def test_portfolio_uses_next_open_to_open_returns(self) -> None:
+        panel = self._panel()
         threshold = compute_stable_gap_cv_threshold(self.split_df, stable_div_count_min=4, quantile=0.5)
         candidates = build_daily_candidates(
             panel=panel,
@@ -128,26 +164,67 @@ class BacktestTests(unittest.TestCase):
             cooldown_td=0,
             cost_bps_one_way=0.0,
             max_industry_weight=1.0,
+            ret_col="exec_ret_1d",
         )
-        self.assertEqual(len(trades_df), 2)
+        self.assertEqual(len(trades_df), 1)
         first_trade = trades_df.iloc[0]
         self.assertEqual(pd.Timestamp(first_trade["signal_date"]), pd.Timestamp("2024-01-01"))
         self.assertEqual(pd.Timestamp(first_trade["entry_date"]), pd.Timestamp("2024-01-02"))
-        self.assertEqual(pd.Timestamp(first_trade["exit_date"]), pd.Timestamp("2024-01-03"))
-        first_day = daily_df[daily_df["date"] == pd.Timestamp("2024-01-01")].iloc[0]
-        self.assertAlmostEqual(float(first_day["portfolio_ret"]), 0.0, places=8)
-        second_day = daily_df[daily_df["date"] == pd.Timestamp("2024-01-02")].iloc[0]
-        self.assertAlmostEqual(float(second_day["portfolio_ret"]), 0.10, places=8)
+        self.assertEqual(pd.Timestamp(first_trade["exit_date"]), pd.Timestamp("2024-01-04"))
+        self.assertAlmostEqual(float(daily_df[daily_df["date"] == pd.Timestamp("2024-01-02")]["portfolio_ret"].iloc[0]), 0.0, places=8)
+        self.assertAlmostEqual(float(daily_df[daily_df["date"] == pd.Timestamp("2024-01-03")]["portfolio_ret"].iloc[0]), 0.10, places=8)
+        self.assertAlmostEqual(float(daily_df[daily_df["date"] == pd.Timestamp("2024-01-04")]["portfolio_ret"].iloc[0]), 0.10, places=8)
         self.assertEqual(
-            positions_df[positions_df["trade_id"] == first_trade["trade_id"]]["date"].tolist(),
-            [pd.Timestamp("2024-01-02"), pd.Timestamp("2024-01-03")],
+            positions_df[positions_df["trade_id"] == first_trade["trade_id"]]["in_return_window"].tolist(),
+            [0, 1, 1],
         )
+        weighted = positions_df[positions_df["trade_id"] == first_trade["trade_id"]]["weighted_ret"].tolist()
+        self.assertAlmostEqual(weighted[0], 0.0, places=8)
+        self.assertAlmostEqual(weighted[1], 0.1, places=8)
+        self.assertAlmostEqual(weighted[2], 0.1, places=8)
+
+    def test_bid_ask_spread_costs_reduce_returns(self) -> None:
+        panel = self._panel()
+        panel.loc[(panel["permno"] == 1) & (panel["date"] == pd.Timestamp("2024-01-02")), ["DlyBid", "DlyAsk"]] = [9.9, 10.1]
+        panel.loc[(panel["permno"] == 1) & (panel["date"] == pd.Timestamp("2024-01-04")), ["DlyBid", "DlyAsk"]] = [11.88, 12.12]
+        threshold = compute_stable_gap_cv_threshold(self.split_df, stable_div_count_min=4, quantile=0.5)
+        candidates = build_daily_candidates(
+            panel=panel,
+            top_k=1,
+            stable_gap_cv_threshold=threshold,
+            turnover_quantile_min=0.2,
+            exclude_div_count_le=1,
+            min_price=3.0,
+            stable_div_count_min=4,
+            stable_prob_threshold=0.4,
+            regular_prob_threshold=0.75,
+            max_industry_weight=1.0,
+            use_dividend_rules=True,
+        )
+        daily_df, trades_df, _ = simulate_portfolio(
+            panel=panel,
+            candidates=candidates,
+            top_k=1,
+            holding_td=2,
+            cooldown_td=0,
+            cost_bps_one_way=0.0,
+            max_industry_weight=1.0,
+            ret_col="exec_ret_1d",
+            use_bid_ask_spread=True,
+            spread_cost_cap_bps_one_way=1000.0,
+        )
+        self.assertAlmostEqual(float(daily_df[daily_df["date"] == pd.Timestamp("2024-01-02")]["portfolio_ret"].iloc[0]), -0.01, places=8)
+        self.assertAlmostEqual(float(daily_df[daily_df["date"] == pd.Timestamp("2024-01-04")]["portfolio_ret"].iloc[0]), 0.09, places=8)
+        first_trade = trades_df.iloc[0]
+        self.assertAlmostEqual(float(first_trade["entry_spread_rate"]), 0.01, places=8)
+        self.assertAlmostEqual(float(first_trade["exit_spread_rate"]), 0.01, places=8)
+        self.assertAlmostEqual(float(first_trade["realized_holding_return"]), 0.19, places=8)
 
     def test_benchmark_and_summary_outputs(self) -> None:
-        panel = add_forward_returns(build_backtest_panel(self.preds_df, self.split_df), horizons=(1, 2, 3))
-        benchmark = build_equal_weight_benchmark(panel, min_price=3.0)
-        day2 = benchmark[benchmark["date"] == pd.Timestamp("2024-01-02")].iloc[0]
-        self.assertAlmostEqual(float(day2["benchmark_ret"]), (0.10 + 0.01 + 0.02) / 3.0, places=8)
+        panel = self._panel()
+        benchmark = build_equal_weight_benchmark(panel, min_price=3.0, ret_col="exec_ret_1d")
+        day3 = benchmark[benchmark["date"] == pd.Timestamp("2024-01-03")].iloc[0]
+        self.assertAlmostEqual(float(day3["benchmark_ret"]), (0.10 + 0.01 - 0.009803921568627416) / 3.0, places=8)
 
         threshold = compute_stable_gap_cv_threshold(self.split_df, stable_div_count_min=4, quantile=0.5)
         candidates = build_daily_candidates(
@@ -171,6 +248,7 @@ class BacktestTests(unittest.TestCase):
             cooldown_td=0,
             cost_bps_one_way=10.0,
             max_industry_weight=1.0,
+            ret_col="exec_ret_1d",
         )
         daily_df = enrich_daily_report(daily_df, benchmark)
         summary = summarize_backtest(
