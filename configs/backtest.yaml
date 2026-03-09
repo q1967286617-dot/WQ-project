@@ -1,0 +1,15 @@
+top_k: 20
+holding_td: 10
+cooldown_td: 0
+turnover_quantile_min: 0.2
+exclude_div_count_le: 1
+cost_bps_one_way: 10.0
+benchmark: equal_weight_universe
+weighting: equal_weight
+min_price: 3.0
+max_industry_weight: 0.25
+stable_div_count_min: 4
+stable_gap_cv_quantile: 0.5
+stable_prob_threshold: 0.45
+regular_prob_threshold: 0.55
+dividend_rules_mode: auto
