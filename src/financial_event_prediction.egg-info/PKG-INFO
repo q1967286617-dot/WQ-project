@@ -1,0 +1,11 @@
+Metadata-Version: 2.4
+Name: financial-event-prediction
+Version: 0.1.0
+Requires-Python: >=3.9
+Requires-Dist: pandas
+Requires-Dist: numpy
+Requires-Dist: pyyaml
+Requires-Dist: pyarrow
+Requires-Dist: xgboost
+Requires-Dist: scikit-learn
+Requires-Dist: joblib

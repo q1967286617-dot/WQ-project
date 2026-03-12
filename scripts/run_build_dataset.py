@@ -3,7 +3,6 @@ from __future__ import annotations
 import sys
 from pathlib import Path as _Path
 sys.path.append(str(_Path(__file__).resolve().parents[1]))
-sys.path.append(str(_Path(__file__).resolve().parents[1] / "src" / "data"))
 
 import argparse
 from pathlib import Path
@@ -11,10 +10,7 @@ from pathlib import Path
 from src.utils.paths import load_yaml, resolve_paths, ensure_dir
 from src.utils.logging import get_logger
 
-import load
-import build_features
-import label
-import split
+from src.data import load, build_features, label, split
 
 
 logger = get_logger("run_build_dataset")

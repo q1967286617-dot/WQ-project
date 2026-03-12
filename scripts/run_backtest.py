@@ -258,7 +258,15 @@ def main() -> None:
     logger.info(f"candidate rows={len(candidates)}")
 
     logger.info("simulating portfolio")
-    benchmark_df = build_equal_weight_benchmark(panel, min_price=float(bt_cfg["min_price"]), ret_col=ret_col)
+    benchmark_df = build_equal_weight_benchmark(
+        panel,
+        min_price=float(bt_cfg["min_price"]),
+        ret_col=ret_col,
+        cost_bps_one_way=float(bt_cfg["cost_bps_one_way"]),           # Fix 1: 与策略成本口径对齐
+        holding_td=int(bt_cfg["holding_td"]),                          # Fix 2: 与策略持仓期对齐
+        turnover_quantile_min=float(bt_cfg["turnover_quantile_min"]),  # Fix 3: 与策略宇宙对齐
+        exclude_div_count_le=int(bt_cfg["exclude_div_count_le"]),      # Fix 3: 与策略宇宙对齐
+    )
     daily_df, trades_df, positions_df = simulate_portfolio(
         panel=panel,
         candidates=candidates,
@@ -299,5 +307,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-
-
