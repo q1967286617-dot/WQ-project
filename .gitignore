@@ -16,4 +16,8 @@ __pycache__/
 .env
 
 .vscode/
-.idea/
+.idea/WQ/
+.DS_Store
+data/.DS_Store
+data/raw/.DS_Store
+src/*.egg-info/
