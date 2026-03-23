@@ -6,9 +6,9 @@ do_scale: True
 
 hyperparams:
   num_boost_round: 200
+  early_stopping_rounds: 20
   learning_rate: 0.05
   max_depth: 5
-  early_stopping_rounds: 20
 
 num_cols:
   # 市场行情特征
