@@ -13,7 +13,9 @@ import pandas as pd
 
 from src.backtest.benchmark import (
     build_equal_weight_benchmark,
+    build_non_prob_candidates,
     build_random_candidates,
+    build_random_prob_candidates,
     build_oracle_candidates,
     compute_alpha_capture,
 )
@@ -144,7 +146,8 @@ def _prepare_panel(base_preds, base_split, table_b_path, holding_td):
     price_df = _load_execution_price_data(table_b_path, base_split)
     panel    = merge_execution_price_data(panel, price_df)
     panel    = add_execution_returns(panel)
-    panel    = add_forward_returns(panel, horizons=(1, 5, int(holding_td)))
+    horizons = sorted({1, 5, 10, int(holding_td)})
+    panel    = add_forward_returns(panel, horizons=horizons)
     return panel
 
 
@@ -221,7 +224,8 @@ def _simulate_reference(
 def _build_three_way_comparison(
     strategy_daily: pd.DataFrame,
     random_daily: pd.DataFrame,
-    oracle_daily: pd.DataFrame,
+    oracle_return_daily: pd.DataFrame,
+    oracle_event_daily: pd.DataFrame | None = None,
 ) -> Dict:
     """
     三点坐标系汇总报告。
@@ -232,27 +236,108 @@ def _build_three_way_comparison(
             return {}
         return _return_metrics(df["portfolio_ret"])
 
+    def _delta(lhs: Dict, rhs: Dict) -> Dict:
+        if not lhs or not rhs:
+            return {}
+        keys = ["annualized_return", "sharpe", "total_return", "max_drawdown"]
+        out: Dict[str, float] = {}
+        for key in keys:
+            if lhs.get(key) is None or rhs.get(key) is None:
+                continue
+            out[f"{key}_diff"] = float(lhs[key]) - float(rhs[key])
+        return out
+
     strategy_m = _safe(strategy_daily)
-    random_m   = _safe(random_daily)
-    oracle_m   = _safe(oracle_daily)
-    alpha_cap  = compute_alpha_capture(strategy_m, random_m, oracle_m)
+    random_m = _safe(random_daily)
+    oracle_return_m = _safe(oracle_return_daily)
+    oracle_event_m = _safe(oracle_event_daily) if oracle_event_daily is not None else {}
+    alpha_cap = compute_alpha_capture(strategy_m, random_m, oracle_return_m)
 
     return {
         "description": (
             "Three-point coordinate system | "
             "random_baseline: zero model skill (lower bound) | "
             "strategy: actual result | "
-            "oracle_ceiling: perfect prediction (upper bound)"
+            "oracle_event_ceiling: strategy-filtered dividend-timing benchmark | "
+            "oracle_return_ceiling: perfect future-return ceiling used for alpha capture"
         ),
+        "reference_definitions": {
+            "random_baseline": "uniform random candidate ranking after tradability filters",
+            "oracle_event_ceiling": (
+                "same universe, policy filters, and cost model as strategy, but ranked by realized dividend-event hits "
+                "instead of model probability; "
+                "use as a timing-information benchmark, not as a strict return upper bound"
+            ),
+            "oracle_return_ceiling": "diagnostic ceiling ranked by realized future holding-period return",
+        },
         "random_baseline": random_m,
-        "strategy":        strategy_m,
-        "oracle_ceiling":  oracle_m,
-        "alpha_capture":   alpha_cap,
-        "grade":           alpha_cap.get("overall_grade", "N/A"),
+        "strategy": strategy_m,
+        "oracle_event_ceiling": oracle_event_m,
+        "oracle_return_ceiling": oracle_return_m,
+        "strategy_vs_event_oracle": _delta(strategy_m, oracle_event_m),
+        "alpha_capture": alpha_cap,
+        "grade": alpha_cap.get("overall_grade", "N/A"),
     }
 
 
 # ── 主函数 ────────────────────────────────────────────────────────────────────
+
+def _build_ranking_comparison(
+    non_prob_daily: pd.DataFrame | None,
+    random_prob_daily: pd.DataFrame | None,
+    strategy_daily: pd.DataFrame | None,
+    oracle_event_daily: pd.DataFrame | None,
+) -> Dict:
+    def _safe(df: pd.DataFrame | None) -> Dict:
+        if df is None or df.empty or "portfolio_ret" not in df.columns:
+            return {}
+        return _return_metrics(df["portfolio_ret"])
+
+    def _delta(lhs: Dict, rhs: Dict) -> Dict:
+        if not lhs or not rhs:
+            return {}
+        keys = ["annualized_return", "sharpe", "total_return", "max_drawdown"]
+        out: Dict[str, float] = {}
+        for key in keys:
+            if lhs.get(key) is None or rhs.get(key) is None:
+                continue
+            out[f"{key}_diff"] = float(lhs[key]) - float(rhs[key])
+        return out
+
+    non_prob_m = _safe(non_prob_daily)
+    random_prob_m = _safe(random_prob_daily)
+    strategy_m = _safe(strategy_daily)
+    oracle_event_m = _safe(oracle_event_daily)
+
+    return {
+        "description": (
+            "Shared-rule ranking comparison | "
+            "non_prob: no probability thresholds or ranking, only non-probability rules | "
+            "random_prob: same prob-filtered pool as strategy, random ranking | "
+            "prob: same prob-filtered pool ranked by model probability | "
+            "y_div_10d: same prob-filtered pool ranked by realized dividend-event label"
+        ),
+        "definitions": {
+            "non_prob": "shared non-probability rules and costs, ignores model probability in both filtering and ranking",
+            "random_prob": "shared strategy candidate pool and costs, random ranking within that pool",
+            "prob": "shared strategy candidate pool and costs, ranked by model probability",
+            "y_div_10d": "shared strategy candidate pool and costs, ranked by realized dividend-event label only",
+        },
+        "metrics": {
+            "non_prob": non_prob_m,
+            "random_prob": random_prob_m,
+            "prob": strategy_m,
+            "y_div_10d": oracle_event_m,
+        },
+        "deltas": {
+            "random_prob_minus_non_prob": _delta(random_prob_m, non_prob_m),
+            "prob_minus_random_prob": _delta(strategy_m, random_prob_m),
+            "y_div_10d_minus_prob": _delta(oracle_event_m, strategy_m),
+            "prob_minus_non_prob": _delta(strategy_m, non_prob_m),
+            "y_div_10d_minus_non_prob": _delta(oracle_event_m, non_prob_m),
+        },
+    }
+
 
 def main() -> None:
     ap = argparse.ArgumentParser()
@@ -406,17 +491,33 @@ def main() -> None:
     logger.info(f"strategy: daily rows={len(daily_df)}, trades={len(trades_df)}")
 
     # ── 三点坐标系：随机基准 + Oracle 基准 ────────────────────────────────────
-    three_way     = {}
-    random_daily  = pd.DataFrame()
-    oracle_daily  = pd.DataFrame()
+    three_way = {}
+    ranking_comparison = {}
+    random_daily = pd.DataFrame()
+    non_prob_daily = pd.DataFrame()
+    random_prob_daily = pd.DataFrame()
+    oracle_return_daily = pd.DataFrame()
+    oracle_event_daily = pd.DataFrame()
     random_trades = pd.DataFrame()
-    oracle_trades = pd.DataFrame()
+    non_prob_trades = pd.DataFrame()
+    random_prob_trades = pd.DataFrame()
+    oracle_return_trades = pd.DataFrame()
+    oracle_event_trades = pd.DataFrame()
+    additional_reference_outputs: Dict[str, Dict[str, pd.DataFrame]] = {}
 
     if not args.skip_reference:
         common_kw = dict(
             min_price=float(bt_cfg["min_price"]),
             turnover_quantile_min=float(bt_cfg["turnover_quantile_min"]),
             exclude_div_count_le=int(bt_cfg["exclude_div_count_le"]),
+        )
+        strategy_shared_kw = dict(
+            stable_gap_cv_threshold=stable_gap_cv_threshold,
+            stable_div_count_min=int(bt_cfg.get("stable_div_count_min", 4)),
+            stable_prob_threshold=float(bt_cfg.get("stable_prob_threshold", 0.45)),
+            regular_prob_threshold=float(bt_cfg.get("regular_prob_threshold", 0.55)),
+            max_industry_weight=float(bt_cfg.get("max_industry_weight", 1.0)),
+            use_dividend_rules=use_dividend_rules,
         )
 
         random_candidates = build_random_candidates(
@@ -429,24 +530,82 @@ def main() -> None:
             "random_baseline", random_candidates, panel, bt_cfg, ret_col
         )
 
-        oracle_candidates = build_oracle_candidates(
+        non_prob_candidates = build_non_prob_candidates(
             panel=panel,
             top_k=int(bt_cfg["top_k"]),
             **common_kw,
+            **strategy_shared_kw,
         )
-        oracle_daily, oracle_trades = _simulate_reference(
-            "oracle_ceiling", oracle_candidates, panel, bt_cfg, ret_col
+        non_prob_daily, non_prob_trades = _simulate_reference(
+            "non_prob_baseline", non_prob_candidates, panel, bt_cfg, ret_col
+        )
+        if not non_prob_daily.empty:
+            additional_reference_outputs["non_prob_baseline"] = {
+                "daily": non_prob_daily,
+                "trades": non_prob_trades,
+            }
+
+        random_prob_candidates = build_random_prob_candidates(
+            panel=panel,
+            top_k=int(bt_cfg["top_k"]),
+            seed=int(bt_cfg.get("random_seed", 42)),
+            **common_kw,
+            **strategy_shared_kw,
+        )
+        random_prob_daily, random_prob_trades = _simulate_reference(
+            "random_prob_baseline", random_prob_candidates, panel, bt_cfg, ret_col
+        )
+        if not random_prob_daily.empty:
+            additional_reference_outputs["random_prob_baseline"] = {
+                "daily": random_prob_daily,
+                "trades": random_prob_trades,
+            }
+
+        oracle_return_candidates = build_oracle_candidates(
+            panel=panel,
+            top_k=int(bt_cfg["top_k"]),
+            mode="return",
+            holding_td=int(bt_cfg["holding_td"]),
+            **common_kw,
+        )
+        oracle_return_daily, oracle_return_trades = _simulate_reference(
+            "oracle_return_ceiling", oracle_return_candidates, panel, bt_cfg, ret_col
         )
 
-        if not random_daily.empty and not oracle_daily.empty:
-            three_way = _build_three_way_comparison(daily_df, random_daily, oracle_daily)
+        oracle_event_candidates = build_oracle_candidates(
+            panel=panel,
+            top_k=int(bt_cfg["top_k"]),
+            mode="event",
+            holding_td=int(bt_cfg["holding_td"]),
+            **common_kw,
+            **strategy_shared_kw,
+        )
+        oracle_event_daily, oracle_event_trades = _simulate_reference(
+            "oracle_event_ceiling", oracle_event_candidates, panel, bt_cfg, ret_col
+        )
+
+        if not non_prob_daily.empty and not random_prob_daily.empty and not oracle_event_daily.empty:
+            ranking_comparison = _build_ranking_comparison(
+                non_prob_daily=non_prob_daily,
+                random_prob_daily=random_prob_daily,
+                strategy_daily=daily_df,
+                oracle_event_daily=oracle_event_daily,
+            )
+
+        if not random_daily.empty and not oracle_return_daily.empty:
+            three_way = _build_three_way_comparison(
+                daily_df,
+                random_daily,
+                oracle_return_daily,
+                oracle_event_daily if not oracle_event_daily.empty else None,
+            )
             logger.info(
                 "Alpha capture ratio: "
                 f"{three_way.get('alpha_capture', {}).get('primary_alpha_capture_ratio', 'N/A')}"
             )
             logger.info(f"Grade: {three_way.get('grade', 'N/A')}")
         else:
-            logger.warning("random or oracle simulation empty; skipping three-way comparison")
+            logger.warning("random or oracle return simulation empty; skipping three-way comparison")
     else:
         logger.info("--skip_reference: skipping random/oracle simulations")
 
@@ -458,6 +617,7 @@ def main() -> None:
                           use_dividend_rules, policy_source, execution_basis),
         cost_model=_cost_model_payload(bt_cfg, execution_basis),
         three_way_comparison=three_way,
+        ranking_comparison=ranking_comparison,
     )
     attribution = build_trade_attribution(trades_df)
 
@@ -473,9 +633,12 @@ def main() -> None:
         research_reports=diagnostic_reports,
         attribution_reports=attribution,
         random_daily_df=random_daily,
-        oracle_daily_df=oracle_daily,
+        oracle_return_daily_df=oracle_return_daily,
+        oracle_event_daily_df=oracle_event_daily,
         random_trades_df=random_trades,
-        oracle_trades_df=oracle_trades,
+        oracle_return_trades_df=oracle_return_trades,
+        oracle_event_trades_df=oracle_event_trades,
+        additional_reference_outputs=additional_reference_outputs,
     )
     logger.info(f"wrote backtest outputs under: {out_dir}")
 

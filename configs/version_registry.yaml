@@ -1,0 +1,185 @@
+feature_groups:
+  base_num:
+    - log_mkt_cap
+    - ret_5d
+    - ret_21d
+    - vol_5d
+    - vol_21d
+    - turnover_5d
+    - turnover_21d
+    - price_to_high
+    - volume_spike
+    - vol_ratio
+    - turnover_ratio
+    - ret_rel_to_ind
+    - days_since_last_div
+    - gap_mean_exp
+    - gap_med_exp
+    - gap_std_exp
+    - gap_mean_rN
+    - gap_std_rN
+    - gap_cv_exp
+    - time_to_med_exp
+    - z_to_med_exp
+    - time_to_mean_rN
+    - z_to_mean_rN
+    - div_count_exp
+    - weekday_sin
+    - weekday_cos
+    - month_sin
+    - month_cos
+    - doy_sin
+    - doy_cos
+  base_cat:
+    - quarter
+    - weekday
+    - is_month_start
+    - is_month_end
+  divamt_num:
+    - div_amt_last
+    - div_amt_mean_exp
+    - div_amt_chg
+    - div_amt_dir_mean_r3
+    - div_no_cut_streak
+  exdt_num:
+    - decl_to_exdt_days
+    - decl_to_exdt_mean_exp
+  ohlc_num:
+    - daily_range_pct
+    - atr_5d
+    - atr_21d
+    - atr_ratio
+    - open_gap_pct
+  liq_num:
+    - bid_ask_spread
+    - bid_ask_spread_5d
+    - log_num_trd
+    - num_trd_spike
+  industry_cat:
+    - industry
+
+versions:
+  random:
+    label: random 随机预测基线 (U(0,1), auto)
+    description: random_uniform_prediction_baseline
+    runner_kind: random
+    num_groups: []
+    cat_groups: []
+    num_boost_round: 0
+    early_stopping_rounds: 0
+    dividend_rules_mode: auto
+    random_seed: 42
+  v1:
+    label: v1 基线 (30+4, 200, auto)
+    description: baseline_30_plus_4
+    num_groups: [base_num]
+    cat_groups: [base_cat]
+    num_boost_round: 200
+    early_stopping_rounds: 20
+    dividend_rules_mode: auto
+  v2:
+    label: v2 全量特征 (46+5, 200, auto)
+    description: full_46_plus_5
+    num_groups: [base_num, divamt_num, exdt_num, ohlc_num, liq_num]
+    cat_groups: [base_cat, industry_cat]
+    num_boost_round: 200
+    early_stopping_rounds: 20
+    dividend_rules_mode: auto
+  v3:
+    label: v3 全量特征 + 强制规则 (46+5, 200, true)
+    description: full_46_plus_5_forced_rules
+    num_groups: [base_num, divamt_num, exdt_num, ohlc_num, liq_num]
+    cat_groups: [base_cat, industry_cat]
+    num_boost_round: 200
+    early_stopping_rounds: 20
+    dividend_rules_mode: true
+  v4:
+    label: v4 精简+多轮 (31+5, 400, true)
+    description: decl_plus_industry_31_plus_5_400_rounds
+    num_groups: [base_num, exdt_num]
+    cat_groups: [base_cat, industry_cat]
+    num_boost_round: 400
+    early_stopping_rounds: 20
+    dividend_rules_mode: true
+  v5:
+    label: v5 全量+多轮 (46+5, 400, true)
+    description: full_46_plus_5_400_rounds
+    num_groups: [base_num, divamt_num, exdt_num, ohlc_num, liq_num]
+    cat_groups: [base_cat, industry_cat]
+    num_boost_round: 400
+    early_stopping_rounds: 30
+    dividend_rules_mode: true
+  v6:
+    label: v6 精简+标准 (31+5, 200, true)
+    description: decl_plus_industry_31_plus_5_200_rounds
+    num_groups: [base_num, exdt_num]
+    cat_groups: [base_cat, industry_cat]
+    num_boost_round: 200
+    early_stopping_rounds: 20
+    dividend_rules_mode: true
+  v7:
+    label: v7 仅 +decl (31+4, 200, auto)
+    description: decl_only_31_plus_4
+    num_groups: [base_num, exdt_num]
+    cat_groups: [base_cat]
+    num_boost_round: 200
+    early_stopping_rounds: 20
+    dividend_rules_mode: auto
+  v8:
+    label: v8 仅 +industry (30+5, 200, true)
+    description: industry_only_30_plus_5
+    num_groups: [base_num]
+    cat_groups: [base_cat, industry_cat]
+    num_boost_round: 200
+    early_stopping_rounds: 20
+    dividend_rules_mode: true
+
+report_targets:
+  v1:
+    report_ann_return: 0.0797
+    report_sharpe: 0.504
+    report_excess_ann: 0.0051
+    report_val_aucpr: 0.750
+    report_policy: auto_pass
+  v2:
+    report_ann_return: 0.0611
+    report_sharpe: 0.406
+    report_excess_ann: -0.0113
+    report_val_aucpr: 0.779
+    report_policy: auto_not_activated
+  v3:
+    report_ann_return: 0.0649
+    report_sharpe: 0.424
+    report_excess_ann: -0.0078
+    report_val_aucpr: 0.779
+    report_policy: forced
+  v4:
+    report_ann_return: 0.0221
+    report_sharpe: 0.210
+    report_excess_ann: -0.0476
+    report_val_aucpr:
+    report_policy: forced
+  v5:
+    report_ann_return: 0.0653
+    report_sharpe: 0.426
+    report_excess_ann: -0.0074
+    report_val_aucpr: 0.790
+    report_policy: forced
+  v6:
+    report_ann_return: 0.0671
+    report_sharpe: 0.433
+    report_excess_ann: -0.0057
+    report_val_aucpr:
+    report_policy: forced
+  v7:
+    report_ann_return: 0.0838
+    report_sharpe: 0.516
+    report_excess_ann: 0.0097
+    report_val_aucpr: 0.773
+    report_policy: auto_pass
+  v8:
+    report_ann_return: 0.0648
+    report_sharpe: 0.422
+    report_excess_ann: -0.0078
+    report_val_aucpr: 0.755
+    report_policy: forced

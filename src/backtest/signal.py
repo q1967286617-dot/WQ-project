@@ -67,11 +67,9 @@ def build_backtest_panel(preds_df: pd.DataFrame, split_df: pd.DataFrame) -> pd.D
     for col in BACKTEST_PANEL_COLS:
         split_col = f"{col}__split"
         if split_col in merged.columns:
-            if col in merged.columns:
-                merged[col] = merged[col].where(merged[col].notna(), merged[split_col])
-                merged = merged.drop(columns=[split_col])
-            else:
-                merged = merged.rename(columns={split_col: col})
+            # Split-side fields are the authoritative raw panel values.
+            merged[col] = merged[split_col]
+            merged = merged.drop(columns=[split_col])
 
     _require_columns(merged, REQUIRED_PRED_COLS + BACKTEST_PANEL_COLS, "backtest_panel")
     return merged.sort_values(["date", "permno"]).reset_index(drop=True)
@@ -248,9 +246,8 @@ def run_signal_research(
     )
 
 
-def build_daily_candidates(
+def prepare_candidate_pool(
     panel: pd.DataFrame,
-    top_k: int,
     stable_gap_cv_threshold: float,
     turnover_quantile_min: float,
     exclude_div_count_le: int,
@@ -258,8 +255,8 @@ def build_daily_candidates(
     stable_div_count_min: int,
     stable_prob_threshold: float,
     regular_prob_threshold: float,
-    max_industry_weight: float,
     use_dividend_rules: bool,
+    require_prob_thresholds: bool = True,
 ) -> pd.DataFrame:
     x = panel.copy().sort_values(["date", "prob"], ascending=[True, False]).reset_index(drop=True)
     turnover_threshold = x.groupby("date")["turnover_5d"].quantile(turnover_quantile_min).rename("turnover_threshold")
@@ -278,23 +275,79 @@ def build_daily_candidates(
         np.where(div_count > exclude_div_count_le, "regular", "no_history"),
     )
 
-    if use_dividend_rules:
+    if use_dividend_rules and require_prob_thresholds:
         x["passes_dividend_rule"] = np.where(
             x["signal_group"].eq("stable"),
             x["prob"] >= stable_prob_threshold,
             np.where(x["signal_group"].eq("regular"), x["prob"] >= regular_prob_threshold, False),
         )
         x["eligible"] = x["tradable"] & x["passes_dividend_rule"] & x["signal_group"].ne("no_history")
+    elif use_dividend_rules:
+        x["passes_dividend_rule"] = x["signal_group"].ne("no_history")
+        x["eligible"] = x["tradable"] & x["signal_group"].ne("no_history")
     else:
         x["passes_dividend_rule"] = x["prob"] >= regular_prob_threshold
-        x["eligible"] = x["tradable"] & x["passes_dividend_rule"]
+        x["eligible"] = x["tradable"] & x["passes_dividend_rule"] if require_prob_thresholds else x["tradable"]
 
+    return x
+
+
+def select_top_k_from_pool(
+    pool: pd.DataFrame,
+    top_k: int,
+    max_industry_weight: float,
+    ranking_mode: str = "prob",
+    seed: int = 42,
+) -> pd.DataFrame:
+    x = pool[pool["eligible"]].copy()
+    if x.empty:
+        return pool.head(0).copy()
+
+    ranking_mode = str(ranking_mode).lower()
+    rng = np.random.default_rng(int(seed))
     chosen: List[pd.DataFrame] = []
     cap_names = max(1, int(np.floor(max_industry_weight * top_k))) if max_industry_weight > 0 else top_k
-    for _, g in x[x["eligible"]].groupby("date", sort=True):
+
+    for _, g in x.groupby("date", sort=True):
         rows = []
         counts: Dict[str, int] = {}
-        for _, r in g.sort_values("prob", ascending=False).iterrows():
+        day = g.copy()
+
+        if ranking_mode == "prob":
+            ranked = day.sort_values(["prob", "permno"], ascending=[False, True])
+        elif ranking_mode == "random":
+            day["_rand"] = rng.random(len(day))
+            ranked = day.sort_values(["_rand", "permno"], ascending=[False, True])
+        elif ranking_mode == "event":
+            hit = pd.to_numeric(day.get("y_div_10d"), errors="coerce").fillna(0)
+            day["_oracle_event_hit"] = hit.astype(int)
+            ranked = day.sort_values(["_oracle_event_hit", "permno"], ascending=[False, True])
+        elif ranking_mode == "non_prob":
+            div_count = pd.to_numeric(day.get("div_count_exp"), errors="coerce").fillna(0)
+            gap_cv = pd.to_numeric(day.get("gap_cv_exp"), errors="coerce").fillna(np.inf)
+            abs_z = pd.to_numeric(day.get("z_to_med_exp"), errors="coerce").abs().fillna(np.inf)
+            turnover = pd.to_numeric(day.get("turnover_5d"), errors="coerce").fillna(-np.inf)
+            group_rank = np.where(day["signal_group"].eq("stable"), 2, np.where(day["signal_group"].eq("regular"), 1, 0))
+            day["_non_prob_group_rank"] = group_rank
+            day["_non_prob_div_count"] = div_count
+            day["_non_prob_gap_cv"] = gap_cv
+            day["_non_prob_abs_z"] = abs_z
+            day["_non_prob_turnover"] = turnover
+            ranked = day.sort_values(
+                [
+                    "_non_prob_group_rank",
+                    "_non_prob_div_count",
+                    "_non_prob_gap_cv",
+                    "_non_prob_abs_z",
+                    "_non_prob_turnover",
+                    "permno",
+                ],
+                ascending=[False, False, True, True, False, True],
+            )
+        else:
+            raise ValueError(f"Unknown ranking_mode: {ranking_mode}")
+
+        for _, r in ranked.iterrows():
             industry = str(r["industry"]) if pd.notna(r["industry"]) else "unknown"
             if counts.get(industry, 0) >= cap_names:
                 continue
@@ -302,15 +355,63 @@ def build_daily_candidates(
             counts[industry] = counts.get(industry, 0) + 1
             if len(rows) >= top_k:
                 break
+
         if rows:
-            day = pd.DataFrame(rows).copy()
-            day["signal_rank"] = np.arange(1, len(day) + 1)
-            chosen.append(day)
+            out_day = pd.DataFrame(rows).copy()
+            out_day["signal_rank"] = np.arange(1, len(out_day) + 1)
+            chosen.append(out_day)
 
     if not chosen:
-        return x.head(0).copy()
+        return pool.head(0).copy()
 
     out = pd.concat(chosen, ignore_index=True)
+    out = out.drop(
+        columns=[
+            "_rand",
+            "_oracle_event_hit",
+            "_non_prob_group_rank",
+            "_non_prob_div_count",
+            "_non_prob_gap_cv",
+            "_non_prob_abs_z",
+            "_non_prob_turnover",
+        ],
+        errors="ignore",
+    )
+    return out
+
+
+def build_daily_candidates(
+    panel: pd.DataFrame,
+    top_k: int,
+    stable_gap_cv_threshold: float,
+    turnover_quantile_min: float,
+    exclude_div_count_le: int,
+    min_price: float,
+    stable_div_count_min: int,
+    stable_prob_threshold: float,
+    regular_prob_threshold: float,
+    max_industry_weight: float,
+    use_dividend_rules: bool,
+) -> pd.DataFrame:
+    x = prepare_candidate_pool(
+        panel=panel,
+        stable_gap_cv_threshold=stable_gap_cv_threshold,
+        turnover_quantile_min=turnover_quantile_min,
+        exclude_div_count_le=exclude_div_count_le,
+        min_price=min_price,
+        stable_div_count_min=stable_div_count_min,
+        stable_prob_threshold=stable_prob_threshold,
+        regular_prob_threshold=regular_prob_threshold,
+        use_dividend_rules=use_dividend_rules,
+    )
+    out = select_top_k_from_pool(
+        pool=x,
+        top_k=top_k,
+        max_industry_weight=max_industry_weight,
+        ranking_mode="prob",
+    )
+    if out.empty:
+        return x.head(0).copy()
     cols_front = [
         "date",
         "permno",

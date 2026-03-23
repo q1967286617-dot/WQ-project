@@ -5,7 +5,12 @@ import unittest
 import pandas as pd
 
 from scripts.run_backtest import policy_split_names, threshold_reference_split_names
-from src.backtest.benchmark import build_equal_weight_benchmark
+from src.backtest.benchmark import (
+    build_equal_weight_benchmark,
+    build_non_prob_candidates,
+    build_oracle_candidates,
+    build_random_prob_candidates,
+)
 from src.backtest.portfolio import simulate_portfolio
 from src.backtest.report import enrich_daily_report, summarize_backtest
 from src.backtest.signal import add_execution_returns, add_forward_returns, build_backtest_panel, build_daily_candidates, compute_stable_gap_cv_threshold, infer_execution_basis, merge_execution_price_data
@@ -119,6 +124,16 @@ class BacktestTests(unittest.TestCase):
         self.assertAlmostEqual(float(day2["exec_ret_1d"]), 0.0, places=8)
         day3 = panel[(panel["permno"] == 1) & (panel["date"] == pd.Timestamp("2024-01-03"))].iloc[0]
         self.assertAlmostEqual(float(day3["exec_ret_1d"]), 0.10, places=8)
+
+    def test_split_side_raw_fields_override_scaled_prediction_extras(self) -> None:
+        preds = self.preds_df.copy()
+        preds["turnover_5d"] = -999.0
+        panel = build_backtest_panel(preds, self.split_df)
+        merged = panel[(panel["permno"] == 1) & (panel["date"] == pd.Timestamp("2024-01-01"))].iloc[0]
+        raw_value = float(
+            self.split_df[(self.split_df["PERMNO"] == 1) & (self.split_df["DlyCalDt"] == pd.Timestamp("2024-01-01"))]["turnover_5d"].iloc[0]
+        )
+        self.assertAlmostEqual(float(merged["turnover_5d"]), raw_value, places=8)
 
     def test_build_candidates_filters_and_industry_cap(self) -> None:
         panel = self._panel()
@@ -260,6 +275,235 @@ class BacktestTests(unittest.TestCase):
         self.assertIn("excess_vs_benchmark", summary)
         self.assertEqual(summary["trades"]["n_trades"], len(trades_df))
 
+    def test_oracle_return_mode_uses_future_return_not_event_hit(self) -> None:
+        panel = self._panel()
+        oracle = build_oracle_candidates(panel, top_k=1, mode="return", holding_td=2, min_price=3.0)
+        day = oracle[oracle["date"] == pd.Timestamp("2024-01-03")].iloc[0]
+        self.assertEqual(int(day["permno"]), 2)
+        self.assertEqual(int(day["y_div_10d"]), 0)
+        self.assertEqual(str(day["signal_group"]), "oracle_return")
+
+    def test_oracle_event_mode_does_not_use_future_return_tiebreak(self) -> None:
+        panel = pd.DataFrame(
+            [
+                {
+                    "date": pd.Timestamp("2024-01-03"),
+                    "permno": 1,
+                    "DlyPrc": 10.0,
+                    "exec_ret_1d": 0.0,
+                    "turnover_5d": 1.0,
+                    "industry": "11",
+                    "y_div_10d": 1,
+                    "fwd_ret_10d": 0.01,
+                },
+                {
+                    "date": pd.Timestamp("2024-01-03"),
+                    "permno": 2,
+                    "DlyPrc": 10.0,
+                    "exec_ret_1d": 0.0,
+                    "turnover_5d": 1.0,
+                    "industry": "11",
+                    "y_div_10d": 1,
+                    "fwd_ret_10d": 0.50,
+                },
+            ]
+        )
+        oracle = build_oracle_candidates(panel, top_k=1, mode="event", min_price=3.0)
+        day = oracle.iloc[0]
+        self.assertEqual(int(day["permno"]), 1)
+        self.assertEqual(int(day["y_div_10d"]), 1)
+        self.assertEqual(str(day["signal_group"]), "oracle_hit")
+
+    def test_oracle_event_mode_can_share_strategy_filters(self) -> None:
+        panel = pd.DataFrame(
+            [
+                {
+                    "date": pd.Timestamp("2024-01-03"),
+                    "permno": 1,
+                    "prob": 0.95,
+                    "DlyPrc": 10.0,
+                    "DlyRet": 0.0,
+                    "exec_ret_1d": 0.0,
+                    "turnover_5d": 1.0,
+                    "industry": "11",
+                    "div_count_exp": 6,
+                    "gap_cv_exp": 0.10,
+                    "z_to_med_exp": 0.0,
+                    "y_div_10d": 0,
+                },
+                {
+                    "date": pd.Timestamp("2024-01-03"),
+                    "permno": 2,
+                    "prob": 0.80,
+                    "DlyPrc": 10.0,
+                    "DlyRet": 0.0,
+                    "exec_ret_1d": 0.0,
+                    "turnover_5d": 1.0,
+                    "industry": "20",
+                    "div_count_exp": 3,
+                    "gap_cv_exp": 0.60,
+                    "z_to_med_exp": 0.0,
+                    "y_div_10d": 1,
+                },
+                {
+                    "date": pd.Timestamp("2024-01-03"),
+                    "permno": 3,
+                    "prob": 0.99,
+                    "DlyPrc": 10.0,
+                    "DlyRet": 0.0,
+                    "exec_ret_1d": 0.0,
+                    "turnover_5d": 1.0,
+                    "industry": "30",
+                    "div_count_exp": 1,
+                    "gap_cv_exp": 0.10,
+                    "z_to_med_exp": 0.0,
+                    "y_div_10d": 1,
+                },
+            ]
+        )
+        oracle = build_oracle_candidates(
+            panel,
+            top_k=2,
+            mode="event",
+            min_price=3.0,
+            exclude_div_count_le=1,
+            stable_gap_cv_threshold=0.20,
+            stable_div_count_min=4,
+            stable_prob_threshold=0.45,
+            regular_prob_threshold=0.75,
+            max_industry_weight=1.0,
+            use_dividend_rules=True,
+        )
+        self.assertEqual(oracle["permno"].tolist(), [2, 1])
+        self.assertEqual(oracle["signal_group"].tolist(), ["regular", "stable"])
+        self.assertEqual(oracle["oracle_event_hit"].tolist(), [1, 0])
+        self.assertAlmostEqual(float(oracle.iloc[0]["prob"]), 0.80, places=8)
+        self.assertAlmostEqual(float(oracle.iloc[1]["prob"]), 0.95, places=8)
+
+    def test_non_prob_candidates_ignore_probability_thresholds(self) -> None:
+        panel = pd.DataFrame(
+            [
+                {
+                    "date": pd.Timestamp("2024-01-03"),
+                    "permno": 1,
+                    "prob": 0.10,
+                    "DlyPrc": 10.0,
+                    "DlyRet": 0.0,
+                    "exec_ret_1d": 0.0,
+                    "turnover_5d": 1.0,
+                    "industry": "11",
+                    "div_count_exp": 6,
+                    "gap_cv_exp": 0.10,
+                    "z_to_med_exp": 0.10,
+                    "y_div_10d": 0,
+                },
+                {
+                    "date": pd.Timestamp("2024-01-03"),
+                    "permno": 2,
+                    "prob": 0.20,
+                    "DlyPrc": 10.0,
+                    "DlyRet": 0.0,
+                    "exec_ret_1d": 0.0,
+                    "turnover_5d": 0.9,
+                    "industry": "20",
+                    "div_count_exp": 3,
+                    "gap_cv_exp": 0.50,
+                    "z_to_med_exp": 0.20,
+                    "y_div_10d": 1,
+                },
+                {
+                    "date": pd.Timestamp("2024-01-03"),
+                    "permno": 3,
+                    "prob": 0.99,
+                    "DlyPrc": 10.0,
+                    "DlyRet": 0.0,
+                    "exec_ret_1d": 0.0,
+                    "turnover_5d": 1.0,
+                    "industry": "30",
+                    "div_count_exp": 1,
+                    "gap_cv_exp": 0.10,
+                    "z_to_med_exp": 0.0,
+                    "y_div_10d": 1,
+                },
+            ]
+        )
+        candidates = build_non_prob_candidates(
+            panel=panel,
+            top_k=2,
+            min_price=3.0,
+            exclude_div_count_le=1,
+            stable_gap_cv_threshold=0.20,
+            stable_div_count_min=4,
+            stable_prob_threshold=0.45,
+            regular_prob_threshold=0.75,
+            max_industry_weight=1.0,
+            use_dividend_rules=True,
+        )
+        self.assertEqual(candidates["permno"].tolist(), [1, 2])
+        self.assertEqual(candidates["signal_group"].tolist(), ["stable", "regular"])
+
+    def test_random_prob_candidates_share_prob_filtered_pool(self) -> None:
+        panel = pd.DataFrame(
+            [
+                {
+                    "date": pd.Timestamp("2024-01-03"),
+                    "permno": 1,
+                    "prob": 0.90,
+                    "DlyPrc": 10.0,
+                    "DlyRet": 0.0,
+                    "exec_ret_1d": 0.0,
+                    "turnover_5d": 1.0,
+                    "industry": "11",
+                    "div_count_exp": 6,
+                    "gap_cv_exp": 0.10,
+                    "z_to_med_exp": 0.10,
+                    "y_div_10d": 0,
+                },
+                {
+                    "date": pd.Timestamp("2024-01-03"),
+                    "permno": 2,
+                    "prob": 0.80,
+                    "DlyPrc": 10.0,
+                    "DlyRet": 0.0,
+                    "exec_ret_1d": 0.0,
+                    "turnover_5d": 0.9,
+                    "industry": "20",
+                    "div_count_exp": 3,
+                    "gap_cv_exp": 0.50,
+                    "z_to_med_exp": 0.20,
+                    "y_div_10d": 1,
+                },
+                {
+                    "date": pd.Timestamp("2024-01-03"),
+                    "permno": 3,
+                    "prob": 0.20,
+                    "DlyPrc": 10.0,
+                    "DlyRet": 0.0,
+                    "exec_ret_1d": 0.0,
+                    "turnover_5d": 1.0,
+                    "industry": "30",
+                    "div_count_exp": 6,
+                    "gap_cv_exp": 0.10,
+                    "z_to_med_exp": 0.0,
+                    "y_div_10d": 1,
+                },
+            ]
+        )
+        candidates = build_random_prob_candidates(
+            panel=panel,
+            top_k=2,
+            seed=7,
+            min_price=3.0,
+            exclude_div_count_le=1,
+            stable_gap_cv_threshold=0.20,
+            stable_div_count_min=4,
+            stable_prob_threshold=0.45,
+            regular_prob_threshold=0.75,
+            max_industry_weight=1.0,
+            use_dividend_rules=True,
+        )
+        self.assertEqual(set(candidates["permno"].tolist()), {1, 2})
+        self.assertTrue((candidates["permno"] != 3).all())
 
 if __name__ == "__main__":
     unittest.main()

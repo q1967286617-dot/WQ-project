@@ -8,6 +8,11 @@ results/*
 !outputs/.gitkeep
 !data/.gitkeep
 !models/.gitkeep
+output/*
+!output/.gitkeep
+data/raw/*.zip
+tmp/
+.pytest_cache/
 
 
 
