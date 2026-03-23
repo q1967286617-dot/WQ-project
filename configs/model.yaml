@@ -11,6 +11,7 @@ hyperparams:
   max_depth: 5
 
 num_cols:
+  # 市场行情特征
   - log_mkt_cap
   - ret_5d
   - ret_21d
@@ -23,6 +24,7 @@ num_cols:
   - vol_ratio
   - turnover_ratio
   - ret_rel_to_ind
+  # 分红历史节奏特征
   - days_since_last_div
   - gap_mean_exp
   - gap_med_exp
@@ -35,17 +37,37 @@ num_cols:
   - time_to_mean_rN
   - z_to_mean_rN
   - div_count_exp
+  # 日历周期编码
   - weekday_sin
   - weekday_cos
   - month_sin
   - month_cos
   - doy_sin
   - doy_cos
-  - decl_to_exdt_days   # 唯一新增数值特征
+  # DIVAMT 金额特征（新增）
+  - div_amt_last
+  - div_amt_mean_exp
+  - div_amt_chg
+  - div_amt_dir_mean_r3
+  - div_no_cut_streak
+  # EXDT 时间结构特征（新增）
+  - decl_to_exdt_days
+  - decl_to_exdt_mean_exp
+  # OHLC 衍生特征（新增）
+  - daily_range_pct
+  - atr_5d
+  - atr_21d
+  - atr_ratio
+  - open_gap_pct
+  # 流动性特征（新增）
+  - bid_ask_spread
+  - bid_ask_spread_5d
+  - log_num_trd
+  - num_trd_spike
 
 cat_cols:
   - quarter
   - weekday
   - is_month_start
-  - is_month_end        
-  # - industry            # 破坏 policy 检验
+  - is_month_end
+  - industry
