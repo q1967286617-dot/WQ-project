@@ -3,10 +3,11 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Optional, List
 
+import joblib
 import numpy as np
 import pandas as pd
 
-from .train import load_artifacts, build_dmatrix
+from .train import load_artifacts, build_dmatrix, TrainArtifacts
 from .preprocess import apply_imputer_and_scaler
 
 
@@ -89,3 +90,34 @@ def predict_to_eval_df(
                 eval_df[c] = x[c].values
 
     return eval_df.sort_values(["permno", "date"]).reset_index(drop=True)
+
+
+def predict_to_eval_df_dispatch(
+    df: pd.DataFrame,
+    art_path: str | Path,
+    permno_col: str = "PERMNO",
+    date_col: str = "DlyCalDt",
+    keep_extra_cols: Optional[List[str]] = None,
+) -> pd.DataFrame:
+    """Auto-detect artifact type and dispatch to the correct predict function."""
+    art = joblib.load(art_path)
+
+    if isinstance(art, TrainArtifacts):
+        return predict_to_eval_df(df, art_path, permno_col=permno_col, date_col=date_col, keep_extra_cols=keep_extra_cols)
+
+    from .train_lgbm import LGBMArtifacts
+    from .train_lgbm import predict_to_eval_df as _lgbm_pred
+    if isinstance(art, LGBMArtifacts):
+        return _lgbm_pred(df, art, permno_col=permno_col, date_col=date_col, keep_extra_cols=keep_extra_cols)
+
+    from .train_catboost import CatBoostArtifacts
+    from .train_catboost import predict_to_eval_df as _cb_pred
+    if isinstance(art, CatBoostArtifacts):
+        return _cb_pred(df, art, permno_col=permno_col, date_col=date_col, keep_extra_cols=keep_extra_cols)
+
+    from .train_lr import LRArtifacts
+    from .train_lr import predict_to_eval_df as _lr_pred
+    if isinstance(art, LRArtifacts):
+        return _lr_pred(df, art, permno_col=permno_col, date_col=date_col, keep_extra_cols=keep_extra_cols)
+
+    raise TypeError(f"Unknown artifact type: {type(art)}")
