@@ -11,7 +11,7 @@ import pandas as pd
 
 from src.utils.paths import load_yaml, resolve_paths, ensure_dir
 from src.utils.logging import get_logger
-from src.modeling.predict import predict_to_eval_df
+from src.modeling.predict import predict_to_eval_df_dispatch as predict_to_eval_df
 
 
 logger = get_logger("run_predict")
@@ -48,7 +48,17 @@ def main():
         raise FileNotFoundError(f"Missing split file: {split_path}")
     df = _read_df(split_path)
 
-    art_path = Path(args.model_artifacts) if args.model_artifacts else (paths.models_dir / f"xgb_{args.run_id}.joblib")
+    if args.model_artifacts:
+        art_path = Path(args.model_artifacts)
+    else:
+        # Auto-detect artifact file by trying known prefixes in priority order
+        _prefixes = ["xgb", "lgbm", "catboost", "lr"]
+        art_path = next(
+            (paths.models_dir / f"{p}_{args.run_id}.joblib"
+             for p in _prefixes
+             if (paths.models_dir / f"{p}_{args.run_id}.joblib").exists()),
+            paths.models_dir / f"xgb_{args.run_id}.joblib",  # fallback keeps old behaviour
+        )
     if not art_path.exists():
         raise FileNotFoundError(f"Missing artifacts: {art_path}")
 
