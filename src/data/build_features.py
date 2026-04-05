@@ -9,6 +9,10 @@ from . import DATA_DIR
 from .load import PERMNO_COL, DATE_COL
 
 
+def _normalize_datetime64_ns(series: pd.Series) -> pd.Series:
+    return pd.to_datetime(series, errors="coerce").astype("datetime64[ns]")
+
+
 def add_calendar_features(df: pd.DataFrame):
     """日历特征：周期性编码 + 月首月末标记"""
     df = df.copy()
@@ -38,6 +42,8 @@ def build_div_event_features(div_ev: pd.DataFrame, recent_n: int = 3) -> pd.Data
     所有统计量均 shift(1)，确保不泄露当前事件信息。
     """
     ev = div_ev.copy()
+    ev["DCLRDT"] = _normalize_datetime64_ns(ev["DCLRDT"])
+    ev["EXDT"] = _normalize_datetime64_ns(ev["EXDT"])
 
     # ── 分红间隔（gap） ────────────────────────────────────────────────
     ev["prev_dclrdt"] = ev.groupby(PERMNO_COL)["DCLRDT"].shift(1)
@@ -133,7 +139,7 @@ def build_causal_features_full(
 
     # ── 0) 强制 dtype + 排序 ──────────────────────────────────────────
     df[PERMNO_COL] = df[PERMNO_COL].astype(int)
-    df[DATE_COL]   = pd.to_datetime(df[DATE_COL])
+    df[DATE_COL]   = _normalize_datetime64_ns(df[DATE_COL])
     df = df.sort_values([DATE_COL, PERMNO_COL]).reset_index(drop=True)
 
     # ── 1) 日历特征 ───────────────────────────────────────────────────
@@ -141,6 +147,8 @@ def build_causal_features_full(
 
     # ── 2) 最近一次分红日期（严格 backward asof） ─────────────────────
     div_ev2 = div_ev[[PERMNO_COL, "DCLRDT"]].copy()
+    div_ev2[PERMNO_COL] = div_ev2[PERMNO_COL].astype(int)
+    div_ev2["DCLRDT"] = _normalize_datetime64_ns(div_ev2["DCLRDT"])
     # merge_asof 要求右侧 on 键全局有序，只按日期排序
     div_ev2 = div_ev2.sort_values("DCLRDT").reset_index(drop=True)
 
@@ -158,7 +166,12 @@ def build_causal_features_full(
 
     # ── 3) 分红节奏统计（事件侧特征 asof 回日频） ─────────────────────
     div_event_feats2 = (
-        div_event_feats
+        div_event_feats.assign(
+            **{
+                PERMNO_COL: div_event_feats[PERMNO_COL].astype(int),
+                "DCLRDT": _normalize_datetime64_ns(div_event_feats["DCLRDT"]),
+            }
+        )
         .sort_values("DCLRDT")   # merge_asof 要求右侧 on 键全局有序
         .reset_index(drop=True)
         .rename(columns={"DCLRDT": "div_feat_dclrdt"})
