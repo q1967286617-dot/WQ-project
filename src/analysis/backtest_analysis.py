@@ -1,7 +1,7 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 from pathlib import Path
-from typing import Iterable
+from typing import Any, Iterable, Sequence
 
 import numpy as np
 import pandas as pd
@@ -190,3 +190,193 @@ def compute_yearly_backtest_metrics(daily_df: pd.DataFrame, version: str | None 
             row["version"] = version
         rows.append(row)
     return pd.DataFrame(rows)
+
+
+def _best_forward_return_col(df: pd.DataFrame, holding_td: int | None = None) -> str | None:
+    candidates: list[str] = []
+    if holding_td is not None:
+        candidates.append(f"fwd_ret_{int(holding_td)}d")
+    candidates.extend(["fwd_ret_10d", "fwd_ret_5d", "fwd_ret_1d", "exec_ret_1d"])
+
+    seen: set[str] = set()
+    for col in candidates:
+        if col in seen:
+            continue
+        seen.add(col)
+        if col in df.columns:
+            return col
+    return None
+
+
+def _safe_corr(x: pd.Series, y: pd.Series, method: str) -> float:
+    aligned = pd.DataFrame({"x": pd.to_numeric(x, errors="coerce"), "y": pd.to_numeric(y, errors="coerce")}).dropna()
+    if len(aligned) < 2:
+        return np.nan
+    if aligned["x"].nunique() <= 1 or aligned["y"].nunique() <= 1:
+        return np.nan
+    method = str(method).lower()
+    if method == "spearman":
+        x_rank = aligned["x"].rank(method="average")
+        y_rank = aligned["y"].rank(method="average")
+        return float(x_rank.corr(y_rank, method="pearson"))
+    return float(aligned["x"].corr(aligned["y"], method=method))
+
+def summarize_score_return_correlations(
+    pool_df: pd.DataFrame,
+    score_col: str = "prob",
+    return_col: str | None = None,
+    holding_td: int | None = None,
+    methods: Sequence[str] = ("spearman", "pearson"),
+    min_obs: int = 5,
+) -> tuple[pd.DataFrame, dict[str, Any]]:
+    x = pool_df.copy()
+    if "eligible" in x.columns:
+        x = x[x["eligible"]].copy()
+    if x.empty:
+        return pd.DataFrame(columns=["date", "n_pool"] + [f"{m}_corr" for m in methods]), {
+            "return_col": return_col or _best_forward_return_col(pool_df, holding_td),
+            "n_days": 0,
+            "n_pool_rows": 0,
+        }
+
+    if return_col is None:
+        return_col = _best_forward_return_col(x, holding_td)
+    if return_col is None:
+        raise ValueError("No forward return column available for correlation diagnostics")
+
+    x["date"] = pd.to_datetime(x["date"], errors="coerce")
+    rows: list[dict[str, Any]] = []
+    for dt, g in x.groupby("date", sort=True):
+        row: dict[str, Any] = {"date": dt, "n_pool": int(len(g))}
+        for method in methods:
+            row[f"{method}_corr"] = _safe_corr(g[score_col], g[return_col], method=method) if len(g) >= min_obs else np.nan
+        rows.append(row)
+
+    daily = pd.DataFrame(rows).sort_values("date").reset_index(drop=True)
+    summary: dict[str, Any] = {
+        "return_col": return_col,
+        "n_days": int(len(daily)),
+        "n_pool_rows": int(len(x)),
+        "avg_pool_size": float(daily["n_pool"].mean()) if len(daily) else np.nan,
+    }
+    for method in methods:
+        col = f"{method}_corr"
+        vals = pd.to_numeric(daily[col], errors="coerce").dropna()
+        summary[f"{method}_mean"] = float(vals.mean()) if len(vals) else np.nan
+        summary[f"{method}_median"] = float(vals.median()) if len(vals) else np.nan
+        summary[f"{method}_positive_rate"] = float((vals > 0).mean()) if len(vals) else np.nan
+        summary[f"{method}_n_days"] = int(len(vals))
+    return daily, summary
+
+
+def compute_score_bucket_metrics(
+    pool_df: pd.DataFrame,
+    score_col: str = "prob",
+    return_col: str | None = None,
+    holding_td: int | None = None,
+    bucket_count: int = 10,
+) -> pd.DataFrame:
+    x = pool_df.copy()
+    if "eligible" in x.columns:
+        x = x[x["eligible"]].copy()
+    if x.empty:
+        return pd.DataFrame(columns=["score_bucket", "n_rows", "mean_score", "mean_forward_return", "median_forward_return", "hit_rate"])
+
+    if return_col is None:
+        return_col = _best_forward_return_col(x, holding_td)
+    if return_col is None:
+        raise ValueError("No forward return column available for score bucket diagnostics")
+
+    x[score_col] = pd.to_numeric(x[score_col], errors="coerce")
+    x[return_col] = pd.to_numeric(x[return_col], errors="coerce")
+    ranked = x[score_col].rank(method="first")
+    q = max(2, min(int(bucket_count), int(ranked.notna().sum())))
+    x["score_bucket"] = pd.qcut(ranked, q=q, labels=[f"q{i}" for i in range(1, q + 1)])
+    out = (
+        x.groupby("score_bucket", dropna=False)
+        .agg(
+            n_rows=("permno", "size"),
+            mean_score=(score_col, "mean"),
+            mean_forward_return=(return_col, "mean"),
+            median_forward_return=(return_col, "median"),
+            hit_rate=("y_div_10d", "mean"),
+        )
+        .reset_index()
+    )
+    out["return_col"] = return_col
+    return out
+
+
+def compute_topk_return_metrics(
+    pool_df: pd.DataFrame,
+    ks: Sequence[int],
+    score_col: str = "prob",
+    return_col: str | None = None,
+    holding_td: int | None = None,
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    x = pool_df.copy()
+    if "eligible" in x.columns:
+        x = x[x["eligible"]].copy()
+    if x.empty:
+        empty_daily = pd.DataFrame(columns=["date", "k", "n_pool", "n_selected", "mean_forward_return", "median_forward_return", "hit_rate", "pool_mean_forward_return", "pool_hit_rate"])
+        empty_summary = pd.DataFrame(columns=["k", "n_days", "avg_pool_size", "mean_forward_return", "median_forward_return", "mean_hit_rate", "mean_return_spread_vs_pool", "mean_hit_spread_vs_pool"])
+        return empty_daily, empty_summary
+
+    if return_col is None:
+        return_col = _best_forward_return_col(x, holding_td)
+    if return_col is None:
+        raise ValueError("No forward return column available for top-k diagnostics")
+
+    x["date"] = pd.to_datetime(x["date"], errors="coerce")
+    x[score_col] = pd.to_numeric(x[score_col], errors="coerce")
+    x[return_col] = pd.to_numeric(x[return_col], errors="coerce")
+    x["y_div_10d"] = pd.to_numeric(x.get("y_div_10d"), errors="coerce")
+
+    unique_ks = sorted({int(k) for k in ks if int(k) > 0})
+    rows: list[dict[str, Any]] = []
+    for dt, g in x.groupby("date", sort=True):
+        ranked = g.sort_values([score_col, "permno"], ascending=[False, True])
+        pool_mean_ret = float(pd.to_numeric(g[return_col], errors="coerce").mean())
+        pool_hit_rate = float(pd.to_numeric(g["y_div_10d"], errors="coerce").mean()) if "y_div_10d" in g.columns else np.nan
+        for k in unique_ks:
+            top = ranked.head(k).copy()
+            if top.empty:
+                continue
+            top_ret = pd.to_numeric(top[return_col], errors="coerce")
+            top_hit = pd.to_numeric(top["y_div_10d"], errors="coerce") if "y_div_10d" in top.columns else pd.Series(dtype=float)
+            rows.append(
+                {
+                    "date": dt,
+                    "k": int(k),
+                    "return_col": return_col,
+                    "n_pool": int(len(g)),
+                    "n_selected": int(len(top)),
+                    "mean_forward_return": float(top_ret.mean()),
+                    "median_forward_return": float(top_ret.median()),
+                    "hit_rate": float(top_hit.mean()) if len(top_hit) else np.nan,
+                    "pool_mean_forward_return": pool_mean_ret,
+                    "pool_hit_rate": pool_hit_rate,
+                    "return_spread_vs_pool": float(top_ret.mean() - pool_mean_ret),
+                    "hit_spread_vs_pool": float(top_hit.mean() - pool_hit_rate) if len(top_hit) else np.nan,
+                }
+            )
+
+    daily = pd.DataFrame(rows).sort_values(["date", "k"]).reset_index(drop=True)
+    if daily.empty:
+        return daily, pd.DataFrame(columns=["k", "n_days", "avg_pool_size", "mean_forward_return", "median_forward_return", "mean_hit_rate", "mean_return_spread_vs_pool", "mean_hit_spread_vs_pool"])
+    summary = (
+        daily.groupby("k", sort=True)
+        .agg(
+            n_days=("date", "nunique"),
+            avg_pool_size=("n_pool", "mean"),
+            mean_forward_return=("mean_forward_return", "mean"),
+            median_forward_return=("mean_forward_return", "median"),
+            mean_hit_rate=("hit_rate", "mean"),
+            mean_return_spread_vs_pool=("return_spread_vs_pool", "mean"),
+            mean_hit_spread_vs_pool=("hit_spread_vs_pool", "mean"),
+        )
+        .reset_index()
+    )
+    summary["return_col"] = return_col
+    return daily, summary
+

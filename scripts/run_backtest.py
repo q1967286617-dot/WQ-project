@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import sys
 from pathlib import Path as _Path
@@ -11,6 +11,11 @@ from typing import Dict, List
 
 import pandas as pd
 
+from src.analysis.backtest_analysis import (
+    compute_score_bucket_metrics,
+    compute_topk_return_metrics,
+    summarize_score_return_correlations,
+)
 from src.backtest.benchmark import (
     build_equal_weight_benchmark,
     build_non_prob_candidates,
@@ -35,7 +40,9 @@ from src.backtest.signal import (
     compute_stable_gap_cv_threshold,
     infer_execution_basis,
     merge_execution_price_data,
+    prepare_candidate_pool,
     run_signal_research,
+    select_top_k_from_pool,
 )
 from src.modeling.predict import predict_to_eval_df
 from src.utils.logging import get_logger
@@ -47,7 +54,7 @@ KEEP_EXTRA_COLS = ["log_mkt_cap", "turnover_5d", "vol_21d", "SICCD", "industry",
 RAW_PRICE_COLS  = ["PERMNO", "DlyCalDt", "DlyOpen", "DlyClose", "DlyHigh", "DlyLow", "DlyBid", "DlyAsk"]
 
 
-# ── 工具函数（与原版完全一致） ────────────────────────────────────────────────
+# 鈹€鈹€ 宸ュ叿鍑芥暟锛堜笌鍘熺増瀹屽叏涓€鑷达級 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
 
 def _read_df(path: Path) -> pd.DataFrame:
     if path.suffix.lower() == ".parquet":
@@ -188,7 +195,7 @@ def _cost_model_payload(bt_cfg: Dict, execution_basis: str) -> Dict:
     }
 
 
-# ── 三点坐标系辅助函数 ─────────────────────────────────────────────────────────
+# 鈹€鈹€ 涓夌偣鍧愭爣绯昏緟鍔╁嚱鏁?鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
 
 def _simulate_reference(
     label: str,
@@ -198,8 +205,8 @@ def _simulate_reference(
     ret_col: str = "exec_ret_1d",
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
     """
-    用随机或 Oracle 候选集运行 simulate_portfolio。
-    成本结构、持仓期、冷却期与主策略完全一致，确保三组可比。
+    鐢ㄩ殢鏈烘垨 Oracle 鍊欓€夐泦杩愯 simulate_portfolio銆?
+    鎴愭湰缁撴瀯銆佹寔浠撴湡銆佸喎鍗存湡涓庝富绛栫暐瀹屽叏涓€鑷达紝纭繚涓夌粍鍙瘮銆?
     """
     logger.info(f"simulating {label} (n_candidates={len(candidates)})")
     if candidates.empty:
@@ -228,8 +235,8 @@ def _build_three_way_comparison(
     oracle_event_daily: pd.DataFrame | None = None,
 ) -> Dict:
     """
-    三点坐标系汇总报告。
-    核心输出：Alpha 捕获率——策略在随机下界与 Oracle 上界之间的位置。
+    涓夌偣鍧愭爣绯绘眹鎬绘姤鍛娿€?
+    鏍稿績杈撳嚭锛欰lpha 鎹曡幏鐜団€斺€旂瓥鐣ュ湪闅忔満涓嬬晫涓?Oracle 涓婄晫涔嬮棿鐨勪綅缃€?
     """
     def _safe(df: pd.DataFrame) -> Dict:
         if df.empty or "portfolio_ret" not in df.columns:
@@ -280,7 +287,7 @@ def _build_three_way_comparison(
     }
 
 
-# ── 主函数 ────────────────────────────────────────────────────────────────────
+# 鈹€鈹€ 涓诲嚱鏁?鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
 
 def _build_ranking_comparison(
     non_prob_daily: pd.DataFrame | None,
@@ -348,7 +355,7 @@ def main() -> None:
     ap.add_argument("--preds_path",      default=None)
     ap.add_argument("--model_artifacts", default=None)
     ap.add_argument("--skip_reference",  action="store_true",
-                    help="跳过 random/oracle 参考模拟（调试加速用）")
+                    help="Skip random/oracle reference simulations for faster debugging.")
     args = ap.parse_args()
 
     paths_cfg = load_yaml(Path(args.paths))
@@ -371,7 +378,7 @@ def main() -> None:
     ret_col = "exec_ret_1d"
     logger.info(f"panel rows={len(panel)}, execution_basis={execution_basis}")
 
-    # stable 分组阈值
+    # stable 鍒嗙粍闃堝€?
     threshold_ref_df = _load_named_splits(
         paths.processed_dir, threshold_reference_split_names(args.split)
     )
@@ -383,13 +390,13 @@ def main() -> None:
     )
     logger.info(f"stable gap_cv threshold={stable_gap_cv_threshold:.6f}")
 
-    # 当前 split 诊断（仅用于输出诊断报告，不影响规则决策）
+    # 褰撳墠 split 璇婃柇锛堜粎鐢ㄤ簬杈撳嚭璇婃柇鎶ュ憡锛屼笉褰卞搷瑙勫垯鍐崇瓥锛?
     logger.info("running current-split research diagnostics")
     diagnostic_reports, diagnostic_decision = run_signal_research(
         panel, high_prob_threshold=float(bt_cfg.get("regular_prob_threshold", 0.55)),
     )
 
-    # ── 分红规则激活决策 ──────────────────────────────────────────────────────
+    # 鈹€鈹€ 鍒嗙孩瑙勫垯婵€娲诲喅绛?鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
     mode            = str(bt_cfg.get("dividend_rules_mode", "auto")).lower()
     policy_decision = diagnostic_decision
     policy_source   = "current_split_diagnostic"
@@ -408,7 +415,7 @@ def main() -> None:
             policy_source = "no_heldout_policy_split_disable"
             logger.warning("auto mode: no held-out prior split; disabling dividend rules")
         else:
-            # 优先复用已有预测文件，避免重新加载模型（解决 numpy 版本不兼容问题）
+            # 浼樺厛澶嶇敤宸叉湁棰勬祴鏂囦欢锛岄伩鍏嶉噸鏂板姞杞芥ā鍨嬶紙瑙ｅ喅 numpy 鐗堟湰涓嶅吋瀹归棶棰橈級
             val_preds_parquet = run_dir / "preds" / "val_preds.parquet"
             val_preds_csv     = run_dir / "preds" / "val_preds.csv"
             if val_preds_parquet.exists() or val_preds_csv.exists():
@@ -419,7 +426,7 @@ def main() -> None:
                     val_preds_df, policy_ref_df, paths.tableB_path, int(bt_cfg["holding_td"])
                 )
             else:
-                # 备用：val 预测文件不存在时才重新加载模型
+                # 澶囩敤锛歷al 棰勬祴鏂囦欢涓嶅瓨鍦ㄦ椂鎵嶉噸鏂板姞杞芥ā鍨?
                 art_path = _resolve_artifacts_path(paths.models_dir, args.run_id, args.model_artifacts)
                 logger.info(f"auto mode: val preds not found, recomputing on: {policy_ref_splits}")
                 research_basis_panel = _build_research_basis_panel(
@@ -438,11 +445,10 @@ def main() -> None:
         f"policy_votes={policy_decision.support_votes}/{policy_decision.total_checks}"
     )
 
-    # ── 主策略 ────────────────────────────────────────────────────────────────
+    # 鈹€鈹€ 涓荤瓥鐣?鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
     logger.info("building strategy candidates")
-    candidates = build_daily_candidates(
+    strategy_pool = prepare_candidate_pool(
         panel=panel,
-        top_k=int(bt_cfg["top_k"]),
         stable_gap_cv_threshold=stable_gap_cv_threshold,
         turnover_quantile_min=float(bt_cfg["turnover_quantile_min"]),
         exclude_div_count_le=int(bt_cfg["exclude_div_count_le"]),
@@ -450,10 +456,50 @@ def main() -> None:
         stable_div_count_min=int(bt_cfg.get("stable_div_count_min", 4)),
         stable_prob_threshold=float(bt_cfg.get("stable_prob_threshold", 0.45)),
         regular_prob_threshold=float(bt_cfg.get("regular_prob_threshold", 0.55)),
-        max_industry_weight=float(bt_cfg.get("max_industry_weight", 1.0)),
         use_dividend_rules=use_dividend_rules,
     )
-    logger.info(f"strategy candidate rows={len(candidates)}")
+    candidates = select_top_k_from_pool(
+        pool=strategy_pool,
+        top_k=int(bt_cfg["top_k"]),
+        max_industry_weight=float(bt_cfg.get("max_industry_weight", 1.0)),
+        ranking_mode="prob",
+    )
+    eligible_mask = pd.to_numeric(strategy_pool.get("eligible"), errors="coerce").fillna(0).astype(bool)
+    logger.info(
+        f"strategy pool rows={len(strategy_pool)}, eligible={int(eligible_mask.sum())}, candidate rows={len(candidates)}"
+    )
+
+    diag_top_k = int(bt_cfg["top_k"])
+    diag_ks = sorted({k for k in [1, min(5, diag_top_k), min(10, diag_top_k), diag_top_k] if k > 0})
+    pool_corr_df, pool_corr_summary = summarize_score_return_correlations(
+        strategy_pool,
+        score_col="prob",
+        holding_td=int(bt_cfg["holding_td"]),
+    )
+    score_bucket_df = compute_score_bucket_metrics(
+        strategy_pool,
+        score_col="prob",
+        holding_td=int(bt_cfg["holding_td"]),
+    )
+    topk_daily_df, topk_summary_df = compute_topk_return_metrics(
+        strategy_pool,
+        ks=diag_ks,
+        score_col="prob",
+        holding_td=int(bt_cfg["holding_td"]),
+    )
+    selection_diagnostics = {
+        "pool": {
+            "n_rows": int(len(strategy_pool)),
+            "n_eligible": int(eligible_mask.sum()),
+            "eligible_rate": float(eligible_mask.mean()) if len(strategy_pool) else 0.0,
+        },
+        "score_return_correlation": pool_corr_summary,
+        "topk_return_summary": topk_summary_df.to_dict(orient="records"),
+    }
+    diagnostic_reports["candidate_pool_score_return_corr"] = pool_corr_df
+    diagnostic_reports["candidate_pool_score_buckets"] = score_bucket_df
+    diagnostic_reports["candidate_pool_topk_returns_daily"] = topk_daily_df
+    diagnostic_reports["candidate_pool_topk_returns_summary"] = topk_summary_df
 
     benchmark_df = build_equal_weight_benchmark(
         panel,
@@ -470,10 +516,10 @@ def main() -> None:
         panel,
         min_price=float(bt_cfg["min_price"]),
         ret_col=ret_col,
-        cost_bps_one_way=float(bt_cfg["cost_bps_one_way"]),           # Fix 1: 与策略成本口径对齐
-        holding_td=int(bt_cfg["holding_td"]),                          # Fix 2: 与策略持仓期对齐
-        turnover_quantile_min=float(bt_cfg["turnover_quantile_min"]),  # Fix 3: 与策略宇宙对齐
-        exclude_div_count_le=int(bt_cfg["exclude_div_count_le"]),      # Fix 3: 与策略宇宙对齐
+        cost_bps_one_way=float(bt_cfg["cost_bps_one_way"]),           # Fix 1: 涓庣瓥鐣ユ垚鏈彛寰勫榻?
+        holding_td=int(bt_cfg["holding_td"]),                          # Fix 2: 涓庣瓥鐣ユ寔浠撴湡瀵归綈
+        turnover_quantile_min=float(bt_cfg["turnover_quantile_min"]),  # Fix 3: 涓庣瓥鐣ュ畤瀹欏榻?
+        exclude_div_count_le=int(bt_cfg["exclude_div_count_le"]),      # Fix 3: 涓庣瓥鐣ュ畤瀹欏榻?
     )
     daily_df, trades_df, positions_df = simulate_portfolio(
         panel=panel,
@@ -490,7 +536,7 @@ def main() -> None:
     daily_df = enrich_daily_report(daily_df, benchmark_df)
     logger.info(f"strategy: daily rows={len(daily_df)}, trades={len(trades_df)}")
 
-    # ── 三点坐标系：随机基准 + Oracle 基准 ────────────────────────────────────
+    # 鈹€鈹€ 涓夌偣鍧愭爣绯伙細闅忔満鍩哄噯 + Oracle 鍩哄噯 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
     three_way = {}
     ranking_comparison = {}
     random_daily = pd.DataFrame()
@@ -609,7 +655,7 @@ def main() -> None:
     else:
         logger.info("--skip_reference: skipping random/oracle simulations")
 
-    # ── 汇总与输出 ─────────────────────────────────────────────────────────────
+    # 鈹€鈹€ 姹囨€讳笌杈撳嚭 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
     summary = summarize_backtest(
         daily_df,
         trades_df,
@@ -618,6 +664,7 @@ def main() -> None:
         cost_model=_cost_model_payload(bt_cfg, execution_basis),
         three_way_comparison=three_way,
         ranking_comparison=ranking_comparison,
+        selection_diagnostics=selection_diagnostics,
     )
     attribution = build_trade_attribution(trades_df)
 
@@ -645,3 +692,6 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+
+
+

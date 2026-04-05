@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import unittest
 
@@ -10,6 +10,11 @@ from src.backtest.benchmark import (
     build_non_prob_candidates,
     build_oracle_candidates,
     build_random_prob_candidates,
+)
+from src.analysis.backtest_analysis import (
+    compute_score_bucket_metrics,
+    compute_topk_return_metrics,
+    summarize_score_return_correlations,
 )
 from src.backtest.portfolio import simulate_portfolio
 from src.backtest.report import enrich_daily_report, summarize_backtest
@@ -505,5 +510,57 @@ class BacktestTests(unittest.TestCase):
         self.assertEqual(set(candidates["permno"].tolist()), {1, 2})
         self.assertTrue((candidates["permno"] != 3).all())
 
+
+    def test_candidate_pool_return_diagnostics(self) -> None:
+        pool = pd.DataFrame(
+            [
+                {"date": pd.Timestamp("2024-01-01"), "permno": 1, "prob": 0.9, "eligible": True,  "fwd_ret_2d": 0.10, "y_div_10d": 1},
+                {"date": pd.Timestamp("2024-01-01"), "permno": 2, "prob": 0.7, "eligible": True,  "fwd_ret_2d": 0.05, "y_div_10d": 1},
+                {"date": pd.Timestamp("2024-01-01"), "permno": 3, "prob": 0.4, "eligible": True,  "fwd_ret_2d": -0.02, "y_div_10d": 0},
+                {"date": pd.Timestamp("2024-01-01"), "permno": 4, "prob": 0.1, "eligible": False, "fwd_ret_2d": 0.50, "y_div_10d": 1},
+                {"date": pd.Timestamp("2024-01-02"), "permno": 1, "prob": 0.8, "eligible": True,  "fwd_ret_2d": 0.08, "y_div_10d": 1},
+                {"date": pd.Timestamp("2024-01-02"), "permno": 2, "prob": 0.5, "eligible": True,  "fwd_ret_2d": 0.01, "y_div_10d": 0},
+                {"date": pd.Timestamp("2024-01-02"), "permno": 3, "prob": 0.2, "eligible": True,  "fwd_ret_2d": -0.04, "y_div_10d": 0},
+                {"date": pd.Timestamp("2024-01-02"), "permno": 4, "prob": 0.95, "eligible": False, "fwd_ret_2d": 0.60, "y_div_10d": 1},
+            ]
+        )
+        corr_daily, corr_summary = summarize_score_return_correlations(pool, holding_td=2, min_obs=2)
+        self.assertEqual(corr_summary["return_col"], "fwd_ret_2d")
+        self.assertEqual(len(corr_daily), 2)
+        self.assertTrue((corr_daily["spearman_corr"] > 0).all())
+
+        bucket_df = compute_score_bucket_metrics(pool, holding_td=2, bucket_count=3)
+        self.assertEqual(int(bucket_df["n_rows"].sum()), 6)
+        self.assertGreater(
+            float(bucket_df.sort_values("mean_score").iloc[-1]["mean_forward_return"]),
+            float(bucket_df.sort_values("mean_score").iloc[0]["mean_forward_return"]),
+        )
+
+        topk_daily, topk_summary = compute_topk_return_metrics(pool, ks=[1, 2], holding_td=2)
+        self.assertEqual(set(topk_summary["k"].tolist()), {1, 2})
+        k1 = topk_summary[topk_summary["k"] == 1].iloc[0]
+        self.assertGreater(float(k1["mean_return_spread_vs_pool"]), 0.0)
+        self.assertGreater(float(k1["mean_hit_spread_vs_pool"]), 0.0)
+        self.assertEqual(len(topk_daily), 4)
+
+    def test_summarize_backtest_keeps_selection_diagnostics(self) -> None:
+        daily_df = pd.DataFrame(
+            [
+                {"date": pd.Timestamp("2024-01-01"), "portfolio_ret": 0.01, "excess_ret": 0.005, "benchmark_nav": 1.0, "n_positions": 2, "turnover": 0.1, "signal_hit_rate": 0.5},
+                {"date": pd.Timestamp("2024-01-02"), "portfolio_ret": 0.00, "excess_ret": -0.002, "benchmark_nav": 1.01, "n_positions": 2, "turnover": 0.1, "signal_hit_rate": 0.0},
+            ]
+        )
+        trades_df = pd.DataFrame([{"realized_holding_return": 0.02, "truncated": 0}])
+        selection_diagnostics = {"pool": {"n_rows": 10, "n_eligible": 4, "eligible_rate": 0.4}}
+        summary = summarize_backtest(
+            daily_df,
+            trades_df,
+            {"mode": "true", "use_dividend_rules": True},
+            selection_diagnostics=selection_diagnostics,
+        )
+        self.assertIn("selection_diagnostics", summary)
+        self.assertEqual(summary["selection_diagnostics"]["pool"]["n_eligible"], 4)
+
 if __name__ == "__main__":
     unittest.main()
+

@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import json
 from pathlib import Path
@@ -30,6 +30,7 @@ def summarize_backtest(
     cost_model: Optional[Dict] = None,
     three_way_comparison: Optional[Dict] = None,
     ranking_comparison: Optional[Dict] = None,
+    selection_diagnostics: Optional[Dict] = None,
 ) -> Dict:
     out = {
         "n_days": int(len(daily_df)),
@@ -69,6 +70,8 @@ def summarize_backtest(
             out["alpha_capture_pct"] = f"{ratio * 100:.1f}%"
     if ranking_comparison:
         out["ranking_comparison"] = ranking_comparison
+    if selection_diagnostics:
+        out["selection_diagnostics"] = selection_diagnostics
 
     return out
 
@@ -255,3 +258,5 @@ def _write_json(obj: Dict, path: Path) -> None:
     ensure_dir(path.parent)
     with open(path, "w", encoding="utf-8") as f:
         json.dump(obj, f, indent=2, default=str)
+
+
