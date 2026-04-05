@@ -380,6 +380,116 @@ def select_top_k_from_pool(
     return out
 
 
+def attach_score_column(
+    base_df: pd.DataFrame,
+    score_df: pd.DataFrame,
+    score_col: str = "prob",
+    output_col: str = "rank_score",
+    date_col: str = "date",
+    permno_col: str = "permno",
+    strict: bool = True,
+) -> pd.DataFrame:
+    """
+    Attach an external score series to a base candidate pool.
+
+    This is used for pool/ranking decomposition:
+      - `base_df` defines the eligible candidate pool
+      - `score_df` provides the ranking signal from another run/model
+    """
+    required = [date_col, permno_col, score_col]
+    missing = [c for c in required if c not in score_df.columns]
+    if missing:
+        raise ValueError(f"score_df missing columns: {missing}")
+    if date_col not in base_df.columns or permno_col not in base_df.columns:
+        raise ValueError(f"base_df missing required join columns: {[c for c in (date_col, permno_col) if c not in base_df.columns]}")
+
+    left = base_df.copy()
+    right = score_df[[date_col, permno_col, score_col]].copy().rename(columns={score_col: output_col})
+    left[date_col] = pd.to_datetime(left[date_col], errors="coerce")
+    right[date_col] = pd.to_datetime(right[date_col], errors="coerce")
+    left[permno_col] = pd.to_numeric(left[permno_col], errors="coerce").astype("Int64")
+    right[permno_col] = pd.to_numeric(right[permno_col], errors="coerce").astype("Int64")
+    left = left[left[date_col].notna() & left[permno_col].notna()].copy()
+    right = right[right[date_col].notna() & right[permno_col].notna()].copy()
+    left[permno_col] = left[permno_col].astype(int)
+    right[permno_col] = right[permno_col].astype(int)
+
+    if right.duplicated(subset=[date_col, permno_col]).any():
+        dup_count = int(right.duplicated(subset=[date_col, permno_col]).sum())
+        raise ValueError(f"score_df has duplicated join keys: {dup_count} duplicated rows")
+
+    merged = left.merge(
+        right,
+        on=[date_col, permno_col],
+        how="left",
+        validate="many_to_one",
+    )
+
+    if strict:
+        missing_mask = merged[output_col].isna()
+        if missing_mask.any():
+            miss = merged.loc[missing_mask, [date_col, permno_col]].head(10).to_dict(orient="records")
+            raise ValueError(
+                f"Failed to attach score column '{score_col}' to {int(missing_mask.sum())} rows. "
+                f"Examples: {miss}"
+            )
+    return merged
+
+
+def select_top_k_from_pool_by_score(
+    pool: pd.DataFrame,
+    top_k: int,
+    max_industry_weight: float,
+    score_col: str,
+    seed: int = 42,
+) -> pd.DataFrame:
+    """
+    Select top-k from an already eligible pool using a custom score column.
+
+    Unlike `select_top_k_from_pool`, this helper does not re-implement ranking modes.
+    It is intended for decomposition experiments where eligibility comes from one model
+    and ranking comes from another.
+    """
+    x = pool[pool["eligible"]].copy()
+    if x.empty:
+        return pool.head(0).copy()
+
+    if score_col not in x.columns:
+        raise ValueError(f"pool missing score column: {score_col}")
+
+    rng = np.random.default_rng(int(seed))
+    chosen: List[pd.DataFrame] = []
+    cap_names = max(1, int(np.floor(max_industry_weight * top_k))) if max_industry_weight > 0 else top_k
+
+    for _, g in x.groupby("date", sort=True):
+        rows = []
+        counts: Dict[str, int] = {}
+        day = g.copy()
+        day["_score"] = pd.to_numeric(day[score_col], errors="coerce").fillna(-np.inf)
+        day["_tie_break"] = rng.random(len(day))
+        ranked = day.sort_values(["_score", "_tie_break", "permno"], ascending=[False, False, True])
+
+        for _, r in ranked.iterrows():
+            industry = str(r["industry"]) if pd.notna(r["industry"]) else "unknown"
+            if counts.get(industry, 0) >= cap_names:
+                continue
+            rows.append(r)
+            counts[industry] = counts.get(industry, 0) + 1
+            if len(rows) >= top_k:
+                break
+
+        if rows:
+            out_day = pd.DataFrame(rows).copy()
+            out_day["signal_rank"] = np.arange(1, len(out_day) + 1)
+            chosen.append(out_day)
+
+    if not chosen:
+        return pool.head(0).copy()
+
+    out = pd.concat(chosen, ignore_index=True)
+    return out.drop(columns=["_score", "_tie_break"], errors="ignore")
+
+
 def build_daily_candidates(
     panel: pd.DataFrame,
     top_k: int,
