@@ -23,6 +23,153 @@ def enrich_daily_report(daily_df: pd.DataFrame, benchmark_df: pd.DataFrame) -> p
     return x
 
 
+def _cost_sum(daily_df: pd.DataFrame, cols: list[str]) -> float:
+    total = 0.0
+    for col in cols:
+        total += float(pd.to_numeric(daily_df.get(col), errors="coerce").fillna(0.0).sum())
+    return total
+
+
+def _safe_cost_share(numerator: float, denominator: float) -> float | None:
+    if abs(float(denominator)) < 1e-12:
+        return None
+    return float(numerator / denominator)
+
+
+def _trade_cost_detail(trades_df: pd.DataFrame) -> pd.DataFrame:
+    if trades_df.empty:
+        return trades_df.copy()
+
+    x = trades_df.copy()
+    x["gross_holding_return"] = (
+        pd.to_numeric(x.get("realized_holding_return"), errors="coerce").fillna(0.0)
+        + pd.to_numeric(x.get("total_cost_rate"), errors="coerce").fillna(0.0)
+    )
+    x["net_holding_return"] = pd.to_numeric(x.get("realized_holding_return"), errors="coerce").fillna(0.0)
+    x["fixed_cost_rate"] = (
+        pd.to_numeric(x.get("entry_fixed_cost_rate"), errors="coerce").fillna(0.0)
+        + pd.to_numeric(x.get("exit_fixed_cost_rate"), errors="coerce").fillna(0.0)
+    )
+    x["spread_cost_rate"] = (
+        pd.to_numeric(x.get("entry_spread_rate"), errors="coerce").fillna(0.0)
+        + pd.to_numeric(x.get("exit_spread_rate"), errors="coerce").fillna(0.0)
+    )
+    x["total_cost_rate"] = pd.to_numeric(x.get("total_cost_rate"), errors="coerce").fillna(
+        x["fixed_cost_rate"] + x["spread_cost_rate"]
+    )
+    x["cost_drag_rate"] = x["gross_holding_return"] - x["net_holding_return"]
+    x["cost_share_of_gross"] = np.where(
+        x["gross_holding_return"].abs() > 1e-12,
+        x["cost_drag_rate"] / x["gross_holding_return"],
+        np.nan,
+    )
+    return x
+
+
+def _aggregate_trade_costs(df: pd.DataFrame, group_col: str) -> pd.DataFrame:
+    if df.empty:
+        return pd.DataFrame(columns=[group_col, "n_trades", "mean_gross_holding_return", "mean_net_holding_return"])
+
+    x = df.copy()
+    x[group_col] = x[group_col].astype("string").fillna("unknown")
+    out = (
+        x.groupby(group_col, dropna=False)
+        .agg(
+            n_trades=("trade_id", "size"),
+            mean_gross_holding_return=("gross_holding_return", "mean"),
+            median_gross_holding_return=("gross_holding_return", "median"),
+            mean_net_holding_return=("net_holding_return", "mean"),
+            median_net_holding_return=("net_holding_return", "median"),
+            mean_cost_drag_rate=("cost_drag_rate", "mean"),
+            mean_total_cost_rate=("total_cost_rate", "mean"),
+            mean_fixed_cost_rate=("fixed_cost_rate", "mean"),
+            mean_spread_cost_rate=("spread_cost_rate", "mean"),
+            total_cost_drag=("cost_drag_rate", "sum"),
+            total_gross_holding_return=("gross_holding_return", "sum"),
+            total_net_holding_return=("net_holding_return", "sum"),
+            win_rate_net=("net_holding_return", lambda s: float((pd.to_numeric(s, errors="coerce") > 0).mean())),
+            win_rate_gross=("gross_holding_return", lambda s: float((pd.to_numeric(s, errors="coerce") > 0).mean())),
+            mean_prob=("prob", "mean"),
+        )
+        .reset_index()
+    )
+    out["cost_share_of_gross"] = out.apply(
+        lambda row: _safe_cost_share(float(row["total_cost_drag"]), float(row["total_gross_holding_return"])),
+        axis=1,
+    )
+    return out
+
+
+def _cost_turnover_summary(daily_df: pd.DataFrame, trades_df: pd.DataFrame) -> Dict:
+    if daily_df.empty:
+        return {
+            "avg_turnover": 0.0,
+            "gross": _return_metrics(pd.Series(dtype=float)),
+            "net": _return_metrics(pd.Series(dtype=float)),
+            "daily_costs": {},
+            "trades": {},
+        }
+
+    gross_metrics = _return_metrics(pd.to_numeric(daily_df.get("gross_ret"), errors="coerce").fillna(0.0))
+    net_metrics = _return_metrics(pd.to_numeric(daily_df.get("portfolio_ret"), errors="coerce").fillna(0.0))
+    total_entry_fixed = _cost_sum(daily_df, ["entry_fixed_cost"])
+    total_entry_spread = _cost_sum(daily_df, ["entry_spread_cost"])
+    total_exit_fixed = _cost_sum(daily_df, ["exit_fixed_cost"])
+    total_exit_spread = _cost_sum(daily_df, ["exit_spread_cost"])
+    total_cost = total_entry_fixed + total_entry_spread + total_exit_fixed + total_exit_spread
+    total_gross = float(pd.to_numeric(daily_df.get("gross_ret"), errors="coerce").fillna(0.0).sum())
+
+    trade_detail = _trade_cost_detail(trades_df)
+    if trade_detail.empty:
+        trade_summary = {
+            "n_trades": 0,
+            "mean_gross_holding_return": np.nan,
+            "median_gross_holding_return": np.nan,
+            "mean_net_holding_return": np.nan,
+            "median_net_holding_return": np.nan,
+            "mean_total_cost_rate": np.nan,
+            "mean_fixed_cost_rate": np.nan,
+            "mean_spread_cost_rate": np.nan,
+            "aggregate_cost_share_of_gross": None,
+        }
+    else:
+        total_trade_cost_drag = float(pd.to_numeric(trade_detail["cost_drag_rate"], errors="coerce").fillna(0.0).sum())
+        total_trade_gross = float(pd.to_numeric(trade_detail["gross_holding_return"], errors="coerce").fillna(0.0).sum())
+        trade_summary = {
+            "n_trades": int(len(trade_detail)),
+            "mean_gross_holding_return": float(pd.to_numeric(trade_detail["gross_holding_return"], errors="coerce").mean()),
+            "median_gross_holding_return": float(pd.to_numeric(trade_detail["gross_holding_return"], errors="coerce").median()),
+            "mean_net_holding_return": float(pd.to_numeric(trade_detail["net_holding_return"], errors="coerce").mean()),
+            "median_net_holding_return": float(pd.to_numeric(trade_detail["net_holding_return"], errors="coerce").median()),
+            "mean_total_cost_rate": float(pd.to_numeric(trade_detail["total_cost_rate"], errors="coerce").mean()),
+            "mean_fixed_cost_rate": float(pd.to_numeric(trade_detail["fixed_cost_rate"], errors="coerce").mean()),
+            "mean_spread_cost_rate": float(pd.to_numeric(trade_detail["spread_cost_rate"], errors="coerce").mean()),
+            "aggregate_cost_share_of_gross": _safe_cost_share(total_trade_cost_drag, total_trade_gross),
+        }
+
+    return {
+        "avg_turnover": float(pd.to_numeric(daily_df["turnover"], errors="coerce").mean()),
+        "median_turnover": float(pd.to_numeric(daily_df["turnover"], errors="coerce").median()),
+        "gross": gross_metrics,
+        "net": net_metrics,
+        "cost_drag": {
+            "annualized_return_diff": float(gross_metrics["annualized_return"] - net_metrics["annualized_return"]),
+            "total_return_diff": float(gross_metrics["total_return"] - net_metrics["total_return"]),
+            "sharpe_diff": float(gross_metrics["sharpe"] - net_metrics["sharpe"]),
+        },
+        "daily_costs": {
+            "total_entry_fixed_cost": total_entry_fixed,
+            "total_entry_spread_cost": total_entry_spread,
+            "total_exit_fixed_cost": total_exit_fixed,
+            "total_exit_spread_cost": total_exit_spread,
+            "total_cost": total_cost,
+            "avg_daily_total_cost": float(total_cost / max(len(daily_df), 1)),
+            "cost_share_of_gross_sum": _safe_cost_share(total_cost, total_gross),
+        },
+        "trades": trade_summary,
+    }
+
+
 def summarize_backtest(
     daily_df: pd.DataFrame,
     trades_df: pd.DataFrame,
@@ -55,6 +202,7 @@ def summarize_backtest(
             ) if len(trades_df) else np.nan,
         },
         "research_decision": research_decision,
+        "cost_turnover": _cost_turnover_summary(daily_df, trades_df),
     }
     if cost_model is not None:
         out["cost_model"] = cost_model
@@ -79,9 +227,17 @@ def summarize_backtest(
 def build_trade_attribution(trades_df: pd.DataFrame) -> Dict[str, pd.DataFrame]:
     if trades_df.empty:
         empty = trades_df.copy()
-        return {"prob_buckets": empty, "dividend_groups": empty, "industry": empty}
+        return {
+            "prob_buckets": empty,
+            "dividend_groups": empty,
+            "industry": empty,
+            "trade_cost_detail": empty,
+            "cost_by_signal_group": empty,
+            "cost_by_industry": empty,
+            "cost_by_prob_bucket": empty,
+        }
 
-    x = trades_df.copy()
+    x = _trade_cost_detail(trades_df)
     q = min(4, len(x))
     x["prob_bucket"] = pd.qcut(
         x["prob"].rank(method="first"), q=q,
@@ -110,6 +266,10 @@ def build_trade_attribution(trades_df: pd.DataFrame) -> Dict[str, pd.DataFrame]:
         "prob_buckets": _agg("prob_bucket"),
         "dividend_groups": _agg("dividend_group"),
         "industry": _agg("industry"),
+        "trade_cost_detail": x,
+        "cost_by_signal_group": _aggregate_trade_costs(x, "signal_group"),
+        "cost_by_industry": _aggregate_trade_costs(x, "industry"),
+        "cost_by_prob_bucket": _aggregate_trade_costs(x, "prob_bucket"),
     }
 
 
