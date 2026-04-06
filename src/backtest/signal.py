@@ -441,6 +441,7 @@ def select_top_k_from_pool_by_score(
     top_k: int,
     max_industry_weight: float,
     score_col: str,
+    tie_break_mode: str = "deterministic",
     seed: int = 42,
 ) -> pd.DataFrame:
     """
@@ -457,7 +458,6 @@ def select_top_k_from_pool_by_score(
     if score_col not in x.columns:
         raise ValueError(f"pool missing score column: {score_col}")
 
-    rng = np.random.default_rng(int(seed))
     chosen: List[pd.DataFrame] = []
     cap_names = max(1, int(np.floor(max_industry_weight * top_k))) if max_industry_weight > 0 else top_k
 
@@ -466,8 +466,15 @@ def select_top_k_from_pool_by_score(
         counts: Dict[str, int] = {}
         day = g.copy()
         day["_score"] = pd.to_numeric(day[score_col], errors="coerce").fillna(-np.inf)
-        day["_tie_break"] = rng.random(len(day))
-        ranked = day.sort_values(["_score", "_tie_break", "permno"], ascending=[False, False, True])
+        mode = str(tie_break_mode).lower()
+        if mode == "deterministic":
+            ranked = day.sort_values(["_score", "permno"], ascending=[False, True])
+        elif mode == "random":
+            rng = np.random.default_rng(int(seed))
+            day["_tie_break"] = rng.random(len(day))
+            ranked = day.sort_values(["_score", "_tie_break", "permno"], ascending=[False, False, True])
+        else:
+            raise ValueError(f"Unknown tie_break_mode: {tie_break_mode}")
 
         for _, r in ranked.iterrows():
             industry = str(r["industry"]) if pd.notna(r["industry"]) else "unknown"

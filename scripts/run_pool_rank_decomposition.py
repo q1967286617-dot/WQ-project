@@ -216,6 +216,7 @@ def _build_combo(
     stable_gap_cv_threshold: float,
     use_dividend_rules: bool,
     top_k: int,
+    tie_break_mode: str,
 ) -> dict[str, Any]:
     pool = prepare_candidate_pool(
         panel=pool_panel,
@@ -239,6 +240,7 @@ def _build_combo(
         top_k=top_k,
         max_industry_weight=float(backtest_cfg.get("max_industry_weight", 1.0)),
         score_col="rank_prob",
+        tie_break_mode=tie_break_mode,
     )
     if selected.empty:
         return {"combo": combo_name, "pool_label": pool_label, "rank_label": rank_label, "summary": {}, "candidate_rows": 0}
@@ -337,6 +339,7 @@ def main() -> None:
     parser.add_argument("--preds_b", default=None)
     parser.add_argument("--analysis_id", default=None)
     parser.add_argument("--allow_partial_overlap", action="store_true")
+    parser.add_argument("--tie_break_mode", choices=["deterministic", "random"], default="deterministic")
     args = parser.parse_args()
 
     paths_cfg = load_yaml(Path(args.paths))
@@ -431,6 +434,7 @@ def main() -> None:
                 stable_gap_cv_threshold=stable_gap_cv_threshold,
                 use_dividend_rules=use_rules,
                 top_k=top_k,
+                tie_break_mode=args.tie_break_mode,
             )
         )
 
@@ -481,6 +485,7 @@ def main() -> None:
             "min_price": float(backtest_cfg["min_price"]),
             "max_industry_weight": float(backtest_cfg.get("max_industry_weight", 1.0)),
             "use_bid_ask_spread": bool(backtest_cfg.get("use_bid_ask_spread", False)),
+            "tie_break_mode": args.tie_break_mode,
         },
         "combos": {item["combo"]: item["summary"] for item in results},
         "combo_meta": {item["combo"]: {"pool_label": item["pool_label"], "rank_label": item["rank_label"], "candidate_rows": item["candidate_rows"], "pool_rows": item["pool_rows"], "out_dir": item["out_dir"]} for item in results},
