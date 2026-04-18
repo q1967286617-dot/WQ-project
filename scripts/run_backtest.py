@@ -356,6 +356,9 @@ def main() -> None:
     ap.add_argument("--model_artifacts", default=None)
     ap.add_argument("--skip_reference",  action="store_true",
                     help="Skip random/oracle reference simulations for faster debugging.")
+    ap.add_argument("--weighting", default="equal", choices=["equal", "prob_weight"],
+                    help="Portfolio weighting scheme. 'equal'=1/top_k per position (default). "
+                         "'prob_weight'=daily softmax over active positions' entry probs.")
     args = ap.parse_args()
 
     paths_cfg = load_yaml(Path(args.paths))
@@ -521,6 +524,7 @@ def main() -> None:
         turnover_quantile_min=float(bt_cfg["turnover_quantile_min"]),  # Fix 3: 涓庣瓥鐣ュ畤瀹欏榻?
         exclude_div_count_le=int(bt_cfg["exclude_div_count_le"]),      # Fix 3: 涓庣瓥鐣ュ畤瀹欏榻?
     )
+    logger.info(f"portfolio weighting scheme: {args.weighting}")
     daily_df, trades_df, positions_df = simulate_portfolio(
         panel=panel,
         candidates=candidates,
@@ -532,6 +536,7 @@ def main() -> None:
         ret_col=ret_col,
         use_bid_ask_spread=bool(bt_cfg.get("use_bid_ask_spread", False)),
         spread_cost_cap_bps_one_way=float(bt_cfg.get("spread_cost_cap_bps_one_way", 100.0)),
+        weighting=args.weighting,
     )
     daily_df = enrich_daily_report(daily_df, benchmark_df)
     logger.info(f"strategy: daily rows={len(daily_df)}, trades={len(trades_df)}")
