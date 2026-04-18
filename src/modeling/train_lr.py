@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import List, Optional
 
@@ -8,7 +8,7 @@ import joblib
 import numpy as np
 import pandas as pd
 from sklearn.linear_model import LogisticRegression
-from sklearn.preprocessing import OneHotEncoder
+from sklearn.preprocessing import OneHotEncoder, PolynomialFeatures
 
 from .preprocess import ImputeScaleStats, apply_imputer_and_scaler
 
@@ -22,10 +22,19 @@ class LRArtifacts:
     cat_cols: List[str]
     target_col: str
     do_scale: bool = True  # LR requires scaling
+    poly: Optional[PolynomialFeatures] = field(default=None)  # None = no expansion
 
 
-def _build_X(x: pd.DataFrame, num_cols: List[str], cat_cols: List[str], ohe: OneHotEncoder) -> np.ndarray:
+def _build_X(
+    x: pd.DataFrame,
+    num_cols: List[str],
+    cat_cols: List[str],
+    ohe: OneHotEncoder,
+    poly: Optional[PolynomialFeatures] = None,
+) -> np.ndarray:
     X_num = x[num_cols].values
+    if poly is not None:
+        X_num = poly.transform(X_num)
     cat_data = x[cat_cols].astype(str).fillna("<<MISSING>>")
     X_cat = ohe.transform(cat_data)
     return np.hstack([X_num, X_cat])
@@ -40,8 +49,10 @@ def train_lr_binary(
     solver: str = "saga",
     max_iter: int = 1000,
     seed: int = 42,
+    poly: Optional[PolynomialFeatures] = None,
 ) -> LogisticRegression:
-    X = np.hstack([X_train_num, X_train_cat])
+    X_num = poly.transform(X_train_num) if poly is not None else X_train_num
+    X = np.hstack([X_num, X_train_cat])
     model = LogisticRegression(
         C=C,
         penalty=penalty,
@@ -67,7 +78,7 @@ def predict_to_eval_df(
     x[permno_col] = x[permno_col].astype(int)
 
     x = apply_imputer_and_scaler(x, art.num_cols, art.impute_stats, do_scale=art.do_scale)
-    X = _build_X(x, art.num_cols, art.cat_cols, art.ohe)
+    X = _build_X(x, art.num_cols, art.cat_cols, art.ohe, poly=art.poly)
     prob = art.model.predict_proba(X)[:, 1]
 
     y = x[art.target_col].astype(int).values if art.target_col in x.columns else np.full(len(x), -1, dtype=int)

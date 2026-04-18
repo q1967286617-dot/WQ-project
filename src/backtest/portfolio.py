@@ -35,7 +35,12 @@ def simulate_portfolio(
     ret_col: str = "exec_ret_1d",
     use_bid_ask_spread: bool = False,
     spread_cost_cap_bps_one_way: float | None = None,
+    weighting: str = "equal",  # "equal" or "prob_weight"
 ) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+    """
+    weighting="equal"       : equal weight 1/top_k per position (default, original behaviour)
+    weighting="prob_weight" : softmax over active positions' entry prob each day, weights sum to 1
+    """
     x = panel.copy().sort_values(["date", "permno"]).reset_index(drop=True)
     x["date"] = pd.to_datetime(x["date"], errors="coerce")
     dates = list(pd.Index(sorted(x["date"].dropna().unique())))
@@ -46,7 +51,8 @@ def simulate_portfolio(
     last_idx_by_permno = x.groupby("permno")["date"].max().map(date_to_idx).to_dict()
     planned_entries = _plan_entries(candidates, dates)
 
-    weight = 1.0 / float(top_k)
+    weighting = str(weighting).lower()
+    equal_weight = 1.0 / float(top_k)
     cost_rate = float(cost_bps_one_way) / 10000.0
     spread_cap = None if spread_cost_cap_bps_one_way is None else float(spread_cost_cap_bps_one_way) / 10000.0
     cap_names = max(1, int(np.floor(max_industry_weight * top_k))) if max_industry_weight > 0 else top_k
@@ -107,23 +113,42 @@ def simulate_portfolio(
             active[permno] = pos
             entries_today.append(pos)
             industry_counts[industry] = industry_counts.get(industry, 0) + 1
-            entry_fixed_cost += weight * cost_rate
-            entry_spread_cost += weight * spread_rate
+            entry_fixed_cost += equal_weight * cost_rate
+            entry_spread_cost += equal_weight * spread_rate
 
         active_today = list(active.values())
         gross_ret = 0.0
         exit_positions = [p for p in active_today if p.active_end_idx == idx]
+
+        # --- compute position weights for this day ---
+        if weighting == "prob_weight" and active_today:
+            probs = np.array([p.prob for p in active_today], dtype=float)
+            # softmax for numerical stability
+            probs_shifted = probs - probs.max()
+            exp_p = np.exp(probs_shifted)
+            norm_weights = exp_p / exp_p.sum()
+            pos_weight_map: Dict[int, float] = {p.permno: float(w) for p, w in zip(active_today, norm_weights)}
+        else:
+            pos_weight_map = {}
+
+        def _get_weight(permno: int) -> float:
+            if weighting == "prob_weight":
+                return pos_weight_map.get(permno, equal_weight)
+            return equal_weight
+
         for pos in exit_positions:
-            exit_fixed_cost += weight * cost_rate
+            w = _get_weight(pos.permno)
+            exit_fixed_cost += w * cost_rate
             spread_rate = 0.0
             if use_bid_ask_spread and day_frame is not None and pos.permno in day_frame.index:
                 spread_rate = _quote_half_spread_rate(_select_row(day_frame, pos.permno), spread_cap)
-            exit_spread_cost += weight * spread_rate
+            exit_spread_cost += w * spread_rate
             exit_spread_by_trade[pos.trade_id] = spread_rate
 
         industry_exposure: Dict[str, float] = {}
 
         for pos in active_today:
+            w = _get_weight(pos.permno)
             in_return_window = idx > pos.entry_idx
             if in_return_window and day_frame is not None and pos.permno in day_frame.index:
                 row = _select_row(day_frame, pos.permno)
@@ -131,15 +156,15 @@ def simulate_portfolio(
                 pos.cum_mult *= 1.0 + stock_ret
             else:
                 stock_ret = 0.0
-            weighted_ret = weight * stock_ret
+            weighted_ret = w * stock_ret
             gross_ret += weighted_ret
-            industry_exposure[pos.industry] = industry_exposure.get(pos.industry, 0.0) + weight
+            industry_exposure[pos.industry] = industry_exposure.get(pos.industry, 0.0) + w
             position_rows.append(
                 {
                     "date": dt,
                     "permno": pos.permno,
                     "trade_id": pos.trade_id,
-                    "weight": weight,
+                    "weight": w,
                     "stock_ret": stock_ret,
                     "weighted_ret": weighted_ret,
                     "in_return_window": int(in_return_window),
@@ -155,8 +180,13 @@ def simulate_portfolio(
                 }
             )
 
+        # entry costs: use equal_weight for entries (weights computed at exit/active time)
+        total_active_w = sum(_get_weight(p.permno) for p in active_today) if active_today else 0.0
+        cash_weight = max(0.0, 1.0 - total_active_w) if weighting == "prob_weight" else max(0.0, 1.0 - len(active_today) * equal_weight)
+
         entry_cost = entry_fixed_cost + entry_spread_cost
         exit_cost = exit_fixed_cost + exit_spread_cost
+        turnover_w = (len(entries_today) + len(exit_positions)) * equal_weight
         daily_rows.append(
             {
                 "date": dt,
@@ -168,15 +198,16 @@ def simulate_portfolio(
                 "entry_spread_cost": entry_spread_cost,
                 "exit_fixed_cost": exit_fixed_cost,
                 "exit_spread_cost": exit_spread_cost,
-                "turnover": (len(entries_today) + len(exit_positions)) * weight,
+                "turnover": turnover_w,
                 "n_positions": len(active_today),
-                "cash_weight": max(0.0, 1.0 - len(active_today) * weight),
+                "cash_weight": cash_weight,
                 "signal_hit_rate": float(np.mean([p.hit_label for p in entries_today])) if entries_today else np.nan,
                 "industry_exposure": industry_exposure,
             }
         )
 
         for pos in exit_positions:
+            w = _get_weight(pos.permno)
             exit_spread_rate = exit_spread_by_trade.get(pos.trade_id, 0.0)
             trade_rows.append(
                 {
@@ -191,7 +222,7 @@ def simulate_portfolio(
                     "prob": pos.prob,
                     "signal_group": pos.signal_group,
                     "industry": pos.industry,
-                    "entry_weight": weight,
+                    "entry_weight": w,
                     "y_entry": pos.hit_label,
                     "entry_fixed_cost_rate": cost_rate,
                     "entry_spread_rate": pos.entry_spread_rate,
