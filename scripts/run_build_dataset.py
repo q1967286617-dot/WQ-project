@@ -48,6 +48,14 @@ def main() -> None:
         h=h_label,
         label_name="y_div_10d",
     )
+    # Auxiliary forward-return label for multi-target / dual-booster experiments.
+    # Aligned with backtest convention: enter t+1 open, exit t+1+h open.
+    df_full_labeled = label.label_forward_return(
+        df_full_labeled,
+        h=h_label,
+        price_col="DlyOpen",
+        label_name=f"fwd_ret_{h_label}d",
+    )
 
     logger.info("splitting")
     train_df, val_df, test_df = split.split_by_date(df_full_labeled, split_cfg)

@@ -38,6 +38,32 @@ def label_within_h_trading_days(df: pd.DataFrame, event_dict: dict, h: int, labe
     return x.drop(columns=["t_end"])
 
 
+def label_forward_return(
+    df: pd.DataFrame,
+    h: int,
+    price_col: str = "DlyOpen",
+    label_name: str = "fwd_ret_10d",
+) -> pd.DataFrame:
+    """
+    Forward return aligned with the backtest execution convention:
+      - enter at t+1 open
+      - exit at t+1+h open
+      - label_t = p_exit / p_entry - 1
+
+    Rows near the tail (where t+1+h is unavailable) get NaN.
+    """
+    x = df.sort_values([PERMNO_COL, DATE_COL]).copy()
+    g = x.groupby(PERMNO_COL, observed=True)[price_col]
+    p_entry = g.shift(-1)
+    p_exit = g.shift(-(1 + h))
+    with np.errstate(divide="ignore", invalid="ignore"):
+        ret = (p_exit.astype("float64") / p_entry.astype("float64")) - 1.0
+    # Mask non-positive or missing entry prices
+    ret = ret.where(p_entry.astype("float64") > 0.0)
+    x[label_name] = ret.astype("float32")
+    return x
+
+
 def main():
     with open(CONFIG_DIR / "config.yaml", "r", encoding="utf-8") as f:
         data = yaml.safe_load(f)
