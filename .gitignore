@@ -26,3 +26,5 @@ __pycache__/
 data/.DS_Store
 data/raw/.DS_Store
 src/*.egg-info/
+
+.claude/
