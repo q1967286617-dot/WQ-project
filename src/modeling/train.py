@@ -127,6 +127,129 @@ def train_xgb_binary(
     return booster
 
 
+@dataclass
+class RegArtifacts:
+    """Same shape as TrainArtifacts, but for a regression booster."""
+    booster: xgb.Booster
+    impute_stats: ImputeScaleStats
+    num_cols: List[str]
+    cat_cols: List[str]
+    cat_categories: Dict[str, List[str]]
+    target_col: str
+    feature_names: List[str]
+    do_scale: bool = False
+
+
+def train_xgb_regressor(
+    dtrain: xgb.DMatrix,
+    dval: xgb.DMatrix,
+    seed: int = 42,
+    nthread: int = -1,
+    max_depth: int = 5,
+    learning_rate: float = 0.05,
+    num_boost_round: int = 500,
+    early_stopping_rounds: int = 20,
+    subsample: float = 0.8,
+    colsample_bytree: float = 0.8,
+    reg_lambda: float = 1.0,
+    reg_alpha: float = 1.0,
+    min_child_weight: float = 1.0,
+    objective: str = "reg:squarederror",
+    device: Optional[str] = None,
+    verbose_eval: int = 50,
+) -> xgb.Booster:
+    """Train an XGBoost regressor with early stopping on RMSE."""
+    if device is None:
+        device = _auto_device()
+
+    params: Dict[str, Any] = {
+        "objective": objective,
+        "eval_metric": ["rmse"],
+        "tree_method": "hist",
+        "device": device,
+
+        "max_depth": int(max_depth),
+        "min_child_weight": float(min_child_weight),
+        "subsample": float(subsample),
+        "colsample_bytree": float(colsample_bytree),
+        "learning_rate": float(learning_rate),
+        "reg_lambda": float(reg_lambda),
+        "reg_alpha": float(reg_alpha),
+
+        "seed": int(seed),
+        "nthread": int(nthread),
+    }
+
+    watchlist = [(dtrain, "train"), (dval, "val")]
+    return xgb.train(
+        params=params,
+        dtrain=dtrain,
+        num_boost_round=int(num_boost_round),
+        evals=watchlist,
+        early_stopping_rounds=int(early_stopping_rounds),
+        verbose_eval=verbose_eval,
+    )
+
+
+def train_xgb_ranker(
+    dtrain: xgb.DMatrix,
+    dval: xgb.DMatrix,
+    seed: int = 42,
+    nthread: int = -1,
+    max_depth: int = 5,
+    learning_rate: float = 0.05,
+    num_boost_round: int = 500,
+    early_stopping_rounds: int = 20,
+    subsample: float = 0.8,
+    colsample_bytree: float = 0.8,
+    reg_lambda: float = 1.0,
+    reg_alpha: float = 1.0,
+    min_child_weight: float = 1.0,
+    objective: str = "rank:ndcg",
+    lambdarank_pair_method: str = "topk",
+    lambdarank_num_pair_per_sample: int = 8,
+    device: Optional[str] = None,
+    verbose_eval: int = 50,
+) -> xgb.Booster:
+    """
+    Train an XGBoost learning-to-rank booster. Groups must already be set on
+    both dtrain and dval (each group == one trading day). Labels should be
+    non-negative relevance scores (e.g. per-day quantile bins).
+    """
+    if device is None:
+        device = _auto_device()
+
+    params: Dict[str, Any] = {
+        "objective": objective,
+        "eval_metric": ["ndcg@20", "ndcg@50"],
+        "tree_method": "hist",
+        "device": device,
+        "lambdarank_pair_method": lambdarank_pair_method,
+        "lambdarank_num_pair_per_sample": int(lambdarank_num_pair_per_sample),
+
+        "max_depth": int(max_depth),
+        "min_child_weight": float(min_child_weight),
+        "subsample": float(subsample),
+        "colsample_bytree": float(colsample_bytree),
+        "learning_rate": float(learning_rate),
+        "reg_lambda": float(reg_lambda),
+        "reg_alpha": float(reg_alpha),
+
+        "seed": int(seed),
+        "nthread": int(nthread),
+    }
+
+    watchlist = [(dtrain, "train"), (dval, "val")]
+    return xgb.train(
+        params=params,
+        dtrain=dtrain,
+        num_boost_round=int(num_boost_round),
+        evals=watchlist,
+        early_stopping_rounds=int(early_stopping_rounds),
+        verbose_eval=verbose_eval,
+    )
+
+
 def save_artifacts(art: TrainArtifacts, path: str | Path) -> None:
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
