@@ -47,6 +47,7 @@ def build_dmatrix(
     y: Optional[np.ndarray] = None,
     enable_categorical: bool = True,
     feature_names: Optional[List[str]] = None,
+    weight: Optional[np.ndarray] = None,
 ) -> xgb.DMatrix:
     """
     Build an XGBoost DMatrix. If feature_names is provided, columns will be reordered/expanded.
@@ -60,6 +61,7 @@ def build_dmatrix(
     return xgb.DMatrix(
         X,
         label=y,
+        weight=weight,
         enable_categorical=enable_categorical,
         missing=np.nan,
         feature_names=feature_names,
