@@ -24,6 +24,11 @@ class VersionSpec:
     dividend_rules_mode: str
     runner_kind: str = "xgb"
     random_seed: int = 42
+    data_suffix: str = ""
+    tradability_weight: bool = False
+    max_depth: int | None = None
+    learning_rate: float | None = None
+    subsample: float | None = None
     report_targets: dict[str, Any] = field(default_factory=dict)
 
     def to_manifest(self) -> dict[str, Any]:
@@ -77,6 +82,11 @@ def load_version_specs(path: str | Path | None = None) -> dict[str, VersionSpec]
             dividend_rules_mode=str(item.get("dividend_rules_mode", "auto")),
             runner_kind=str(item.get("runner_kind", "xgb")),
             random_seed=int(item.get("random_seed", 42)),
+            data_suffix=str(item.get("data_suffix", "")),
+            tradability_weight=bool(item.get("tradability_weight", False)),
+            max_depth=int(item["max_depth"]) if "max_depth" in item else None,
+            learning_rate=float(item["learning_rate"]) if "learning_rate" in item else None,
+            subsample=float(item["subsample"]) if "subsample" in item else None,
             report_targets=dict(report_targets.get(version, {})),
         )
     return specs
@@ -102,6 +112,12 @@ def build_model_cfg(base_cfg: dict[str, Any], spec: VersionSpec) -> dict[str, An
     cfg["hyperparams"] = dict(cfg["hyperparams"])
     cfg["hyperparams"]["num_boost_round"] = spec.num_boost_round
     cfg["hyperparams"]["early_stopping_rounds"] = spec.early_stopping_rounds
+    if spec.max_depth is not None:
+        cfg["hyperparams"]["max_depth"] = spec.max_depth
+    if spec.learning_rate is not None:
+        cfg["hyperparams"]["learning_rate"] = spec.learning_rate
+    if spec.subsample is not None:
+        cfg["hyperparams"]["subsample"] = spec.subsample
     return cfg
 
 

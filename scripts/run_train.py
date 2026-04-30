@@ -32,10 +32,10 @@ def _read_df(path: Path) -> pd.DataFrame:
     return pd.read_csv(path)
 
 
-def _read_split_parquets(processed_dir: Path) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
-    train_p = processed_dir / "train.parquet"
-    val_p = processed_dir / "val.parquet"
-    test_p = processed_dir / "test.parquet"
+def _read_split_parquets(processed_dir: Path, suffix: str = "") -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+    train_p = processed_dir / f"train{suffix}.parquet"
+    val_p = processed_dir / f"val{suffix}.parquet"
+    test_p = processed_dir / f"test{suffix}.parquet"
     if not (train_p.exists() and val_p.exists() and test_p.exists()):
         raise FileNotFoundError(
             "Missing processed split files. Expected:\n"
@@ -50,6 +50,9 @@ def main():
     ap.add_argument("--paths", default="configs/paths.yaml")
     ap.add_argument("--model_cfg", default="configs/model.yaml")
     ap.add_argument("--run_id", default=None)
+    ap.add_argument("--data_suffix", default="", help="Suffix for split parquet files, e.g. _with_fundamentals")
+    ap.add_argument("--tradability_weight", action="store_true",
+                    help="Weight training samples by liquidity: w = 1/(1+bid_ask_spread_5d)")
     args = ap.parse_args()
 
     run_id = args.run_id or datetime.now().strftime("%Y-%m-%d_%H%M%S")
@@ -65,7 +68,7 @@ def main():
     logger.info(f"processed_dir={paths.processed_dir}")
 
     # Load processed splits
-    train_df, val_df, test_df = _read_split_parquets(paths.processed_dir)
+    train_df, val_df, test_df = _read_split_parquets(paths.processed_dir, suffix=args.data_suffix)
 
     target_col = model_cfg.get("target_col", "y_div_10d")
     num_cols = list(model_cfg["num_cols"])
@@ -92,7 +95,18 @@ def main():
 
     feature_names = num_cols + cat_cols
 
-    dtrain = build_dmatrix(X_train, y_train, enable_categorical=True, feature_names=feature_names)
+    # Tradability sample weighting: w = 1 / (1 + bid_ask_spread_5d)
+    train_weight = None
+    if args.tradability_weight and "bid_ask_spread_5d" in train_df.columns:
+        spread = train_df["bid_ask_spread_5d"].fillna(train_df["bid_ask_spread_5d"].median()).clip(lower=0)
+        raw_w = 1.0 / (1.0 + spread)
+        raw_w = raw_w.clip(lower=1e-3)               # XGBoost requires strictly positive weights
+        train_weight = (raw_w / raw_w.mean()).values  # normalize so mean=1
+        logger.info(f"tradability_weight ON: w min={train_weight.min():.3f} mean=1.000 max={train_weight.max():.3f}")
+    elif args.tradability_weight:
+        logger.warning("tradability_weight requested but bid_ask_spread_5d not found; ignored")
+
+    dtrain = build_dmatrix(X_train, y_train, enable_categorical=True, feature_names=feature_names, weight=train_weight)
     dval = build_dmatrix(X_val, y_val, enable_categorical=True, feature_names=feature_names)
 
     booster = train_xgb_binary(
@@ -102,6 +116,7 @@ def main():
         neg=neg,
         max_depth=hyperparams['max_depth'],
         learning_rate=hyperparams['learning_rate'],
+        subsample=hyperparams.get('subsample', 0.8),
         num_boost_round=hyperparams['num_boost_round'],
         early_stopping_rounds=hyperparams['early_stopping_rounds'],
         verbose_eval=50,

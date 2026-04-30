@@ -34,6 +34,7 @@ def main():
     ap.add_argument("--run_id", required=True)
     ap.add_argument("--split", choices=["train", "val", "test"], default="val")
     ap.add_argument("--model_artifacts", default=None, help="Override artifacts path; otherwise inferred from models/xgb_<run_id>.joblib")
+    ap.add_argument("--data_suffix", default="", help="Suffix for split parquet files, e.g. _with_fundamentals")
     args = ap.parse_args()
 
     paths_cfg = load_yaml(Path(args.paths))
@@ -43,7 +44,7 @@ def main():
     ensure_dir(run_dir / "preds")
 
     # Load split data
-    split_path = paths.processed_dir / f"{args.split}.parquet"
+    split_path = paths.processed_dir / f"{args.split}{args.data_suffix}.parquet"
     if not split_path.exists():
         raise FileNotFoundError(f"Missing split file: {split_path}")
     df = _read_df(split_path)

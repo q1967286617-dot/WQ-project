@@ -244,6 +244,10 @@ def main() -> None:
 
     model_artifact = paths.models_dir / f"xgb_{args.run_id}.joblib"
     train_cmd = ["python", "scripts/run_train.py", "--run_id", args.run_id, "--model_cfg", str(model_cfg_path)]
+    if spec.data_suffix:
+        train_cmd += ["--data_suffix", spec.data_suffix]
+    if spec.tradability_weight:
+        train_cmd += ["--tradability_weight"]
     if spec.runner_kind != "random" and (args.force_train or not model_artifact.exists()):
         code, _ = _run_cmd(train_cmd, logs_dir / "train.log")
         if code != 0:
@@ -260,6 +264,8 @@ def main() -> None:
             cmd = ["python", "scripts/run_random_predict.py", "--run_id", args.run_id, "--split", split, "--seed", str(spec.random_seed)]
         else:
             cmd = ["python", "scripts/run_predict.py", "--run_id", args.run_id, "--split", split]
+            if spec.data_suffix:
+                cmd += ["--data_suffix", spec.data_suffix]
         code, _ = _run_cmd(cmd, logs_dir / f"predict_{split}.log")
         if code != 0:
             raise SystemExit(f"predict failed for split={split}")

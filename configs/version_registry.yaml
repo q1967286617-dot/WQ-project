@@ -57,6 +57,13 @@ feature_groups:
     - num_trd_spike
   industry_cat:
     - industry
+  fundamentals_num:
+    - roe
+    - payout_ratio
+    - div_coverage
+    - dvpsxq
+    - leverage
+    - profit_margin
 
 versions:
   random:
@@ -133,6 +140,46 @@ versions:
     num_boost_round: 200
     early_stopping_rounds: 20
     dividend_rules_mode: true
+  v9:
+    label: v9 全特征+Compustat基本面 (52+5, 200, true)
+    description: full_features_plus_compustat_fundamentals
+    num_groups: [base_num, divamt_num, exdt_num, ohlc_num, liq_num, fundamentals_num]
+    cat_groups: [base_cat, industry_cat]
+    num_boost_round: 200
+    early_stopping_rounds: 20
+    dividend_rules_mode: true
+    data_suffix: _with_fundamentals
+  v10:
+    label: v10 全特征+Compustat基本面+50轮 (52+5, 50, true)
+    description: full_features_plus_compustat_fundamentals_50rounds
+    num_groups: [base_num, divamt_num, exdt_num, ohlc_num, liq_num, fundamentals_num]
+    cat_groups: [base_cat, industry_cat]
+    num_boost_round: 50
+    early_stopping_rounds: 20
+    dividend_rules_mode: true
+    data_suffix: _with_fundamentals
+  v11:
+    label: v11 全特征+Compustat+可交易性加权 (52+5, 200, true)
+    description: full_features_compustat_tradability_weighted
+    num_groups: [base_num, divamt_num, exdt_num, ohlc_num, liq_num, fundamentals_num]
+    cat_groups: [base_cat, industry_cat]
+    num_boost_round: 200
+    early_stopping_rounds: 20
+    dividend_rules_mode: true
+    data_suffix: _with_fundamentals
+    tradability_weight: true
+  v12:
+    label: v12 HPO优化 (52+5, d6/lr0.08/sub0.8, 200, true)
+    description: full_features_compustat_hpo_depth6_lr008_sub08
+    num_groups: [base_num, divamt_num, exdt_num, ohlc_num, liq_num, fundamentals_num]
+    cat_groups: [base_cat, industry_cat]
+    num_boost_round: 200
+    early_stopping_rounds: 20
+    max_depth: 6
+    learning_rate: 0.08
+    subsample: 0.8
+    dividend_rules_mode: true
+    data_suffix: _with_fundamentals
 
 report_targets:
   v1:
