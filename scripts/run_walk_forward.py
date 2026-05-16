@@ -81,6 +81,11 @@ def main() -> None:
     ap.add_argument("--seed", type=int, default=42)
     ap.add_argument("--keep_fold_parquets", action="store_true",
                     help="Keep per-fold processed parquets after each fold finishes")
+    ap.add_argument("--warmup_days", type=int, default=0,
+                    help="Calendar days before first fold's test_start to also predict, "
+                         "using the first fold's model. Lets simulate_portfolio plan "
+                         "carry-in entries that mirror what single-train backtest sees, "
+                         "removing first-fold boundary bias. Recommend ~30 (>= holding_td days).")
     args = ap.parse_args()
 
     paths_cfg = load_yaml(Path(args.paths))
@@ -175,6 +180,40 @@ def main() -> None:
 
     if not test_preds_parts:
         raise SystemExit("no folds produced predictions")
+
+    # Warmup: predict on the N calendar days immediately before the first
+    # fold's test_start using the FIRST fold's model. Without this, the
+    # combined backtest cannot plan entries on the first ~holding_td days
+    # of test_start because the signals that would have triggered them
+    # (from the prior trading days) are missing from the panel. Single-
+    # train backtest has those signals naturally because its panel begins
+    # at the test split's first day; WF's panel begins at test_start.
+    if args.warmup_days > 0 and folds:
+        first = folds[0]
+        warmup_start = (pd.to_datetime(first.test_start) - pd.Timedelta(days=int(args.warmup_days))).strftime("%Y-%m-%d")
+        warmup_end   = (pd.to_datetime(first.test_start) - pd.Timedelta(days=1)).strftime("%Y-%m-%d")
+        d_full = pd.to_datetime(full["DlyCalDt"], errors="coerce")
+        warmup_slice = full[(d_full >= pd.to_datetime(warmup_start)) & (d_full <= pd.to_datetime(warmup_end))].copy()
+        if not warmup_slice.empty:
+            from src.modeling.predict import predict_to_eval_df_dispatch
+            first_run_id = f"{args.combined_id}__{first.fold_id}"
+            # Auto-locate first fold's artifact (run_predict's lookup logic)
+            art_path = None
+            for prefix in ["xgb", "lgbm", "catboost", "lr"]:
+                cand = models_dir / f"{prefix}_{first_run_id}.joblib"
+                if cand.exists():
+                    art_path = cand
+                    break
+            if art_path is None:
+                raise FileNotFoundError(f"no artifact for first fold {first_run_id}")
+            logger.info(f"warmup predict: {warmup_start}..{warmup_end} ({len(warmup_slice)} rows) using {art_path.name}")
+            keep = ["log_mkt_cap", "turnover_5d", "vol_21d", "SICCD", "industry", "has_div_history"]
+            warmup_preds = predict_to_eval_df_dispatch(warmup_slice, art_path, keep_extra_cols=keep)
+            warmup_preds["date"] = pd.to_datetime(warmup_preds["date"], errors="coerce")
+            wmask = (warmup_preds["date"] >= pd.to_datetime(warmup_start)) & (warmup_preds["date"] <= pd.to_datetime(warmup_end))
+            warmup_preds = warmup_preds[wmask].copy()
+            logger.info(f"warmup preds: {len(warmup_preds)} rows from first fold's model")
+            test_preds_parts.insert(0, warmup_preds)
 
     combined_preds = pd.concat(test_preds_parts, ignore_index=True)
     combined_preds = combined_preds.drop_duplicates(subset=["date", "permno"], keep="last").sort_values(["permno", "date"]).reset_index(drop=True)
