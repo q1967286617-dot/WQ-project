@@ -53,6 +53,7 @@ def main():
     ap.add_argument("--data_suffix", default="", help="Suffix for split parquet files, e.g. _with_fundamentals")
     ap.add_argument("--tradability_weight", action="store_true",
                     help="Weight training samples by liquidity: w = 1/(1+bid_ask_spread_5d)")
+    ap.add_argument("--seed", type=int, default=42, help="Random seed for XGBoost")
     args = ap.parse_args()
 
     run_id = args.run_id or datetime.now().strftime("%Y-%m-%d_%H%M%S")
@@ -114,6 +115,7 @@ def main():
         dval=dval,
         pos=pos,
         neg=neg,
+        seed=int(args.seed),
         max_depth=hyperparams['max_depth'],
         learning_rate=hyperparams['learning_rate'],
         subsample=hyperparams.get('subsample', 0.8),
