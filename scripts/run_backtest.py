@@ -401,6 +401,11 @@ def main() -> None:
     ap.add_argument("--weighting", default="equal", choices=["equal", "prob_weight"],
                     help="Portfolio weighting scheme. 'equal'=1/top_k per position (default). "
                          "'prob_weight'=daily softmax over active positions' entry probs.")
+    ap.add_argument("--reset_active_at", default=None,
+                    help="YYYY-MM-DD. Clear simulate_portfolio's active/cooldown state on the "
+                         "first panel date >= this date, before processing planned entries. "
+                         "Lets WF (panel starting at YYYY-01) and ST (panel starting earlier) "
+                         "be compared apples-to-apples on the post-reset window.")
     args = ap.parse_args()
 
     paths_cfg = load_yaml(Path(args.paths))
@@ -567,6 +572,8 @@ def main() -> None:
         exclude_div_count_le=int(bt_cfg["exclude_div_count_le"]),      # Fix 3: 涓庣瓥鐣ュ畤瀹欏榻?
     )
     logger.info(f"portfolio weighting scheme: {args.weighting}")
+    if args.reset_active_at:
+        logger.info(f"reset_active_at: {args.reset_active_at} (clears active state on first panel date >= this)")
     daily_df, trades_df, positions_df = simulate_portfolio(
         panel=panel,
         candidates=candidates,
@@ -579,6 +586,7 @@ def main() -> None:
         use_bid_ask_spread=bool(bt_cfg.get("use_bid_ask_spread", False)),
         spread_cost_cap_bps_one_way=float(bt_cfg.get("spread_cost_cap_bps_one_way", 100.0)),
         weighting=args.weighting,
+        reset_active_at=args.reset_active_at,
     )
     daily_df = enrich_daily_report(daily_df, benchmark_df)
     logger.info(f"strategy: daily rows={len(daily_df)}, trades={len(trades_df)}")
