@@ -148,13 +148,55 @@ def _load_execution_price_data(table_b_path: Path, base_df: pd.DataFrame) -> pd.
     return raw.drop_duplicates(subset=["date", "permno"]).sort_values(["date", "permno"]).reset_index(drop=True)
 
 
+def _compute_returns_on_price_panel(price_df: pd.DataFrame, horizons: list[int]) -> pd.DataFrame:
+    """Compute exec_ret_1d + fwd_ret_<h>d on the split-bounded raw price panel.
+
+    The price_df from _load_execution_price_data spans the FULL test split's
+    date range (e.g. 2015-2024), independent of which subset of dates the
+    preds-bounded panel covers. Computing returns here, then merging them
+    into the panel, prevents the first-day-of-panel NaN cascade that occurs
+    when add_execution_returns runs on a panel whose first row per permno
+    is not the permno's earliest available date.
+
+    Only supports open_to_open. For close_to_close (no DlyOpen), the caller
+    must fall back to the original panel-side computation.
+    """
+    import numpy as _np
+    x = price_df.copy().sort_values(["permno", "date"]).reset_index(drop=True)
+    open_px = pd.to_numeric(x.get("DlyOpen"), errors="coerce").where(lambda s: s > 0)
+    x["exec_ret_1d"] = open_px.groupby(x["permno"]).pct_change(fill_method=None)
+    g = open_px.groupby(x["permno"])
+    for h in horizons:
+        x[f"fwd_ret_{int(h)}d"] = g.shift(-(int(h) + 1)) / g.shift(-1) - 1.0
+    return x
+
+
 def _prepare_panel(base_preds, base_split, table_b_path, holding_td):
     panel    = build_backtest_panel(base_preds, base_split)
     price_df = _load_execution_price_data(table_b_path, base_split)
     panel    = merge_execution_price_data(panel, price_df)
-    panel    = add_execution_returns(panel)
     horizons = sorted({1, 5, 10, int(holding_td)})
-    panel    = add_forward_returns(panel, horizons=horizons)
+
+    # Panel-isolation fix: compute returns on the split-bounded price panel
+    # (whose date range is the full split, e.g. 2015-2024) rather than on
+    # the preds-bounded panel. This makes return values independent of
+    # which subset of dates the preds covers, eliminating the boundary
+    # NaN cascade in walk-forward and other partial-coverage backtests.
+    use_open = price_df is not None and not price_df.empty and "DlyOpen" in price_df.columns \
+               and pd.to_numeric(price_df["DlyOpen"], errors="coerce").notna().any()
+    if use_open:
+        returns_df = _compute_returns_on_price_panel(price_df, horizons=horizons)
+        return_cols = ["exec_ret_1d"] + [f"fwd_ret_{h}d" for h in horizons]
+        panel = panel.drop(columns=[c for c in return_cols if c in panel.columns], errors="ignore")
+        panel = panel.merge(
+            returns_df[["date", "permno"] + return_cols],
+            on=["date", "permno"], how="left",
+        )
+    else:
+        # Close-to-close fallback (no DlyOpen): keep legacy panel-side
+        # computation. Boundary NaN will still occur in this path.
+        panel = add_execution_returns(panel)
+        panel = add_forward_returns(panel, horizons=horizons)
     return panel
 
 
