@@ -181,6 +181,19 @@ versions:
     dividend_rules_mode: true
     data_suffix: _with_fundamentals
 
+  v12_nofund:
+    label: v12_nofund (46+5, d6/lr0.08/sub0.8, 200, true)
+    description: no_compustat_hpo_depth6_lr008_sub08
+    num_groups: [base_num, divamt_num, exdt_num, ohlc_num, liq_num]
+    cat_groups: [base_cat, industry_cat]
+    num_boost_round: 200
+    early_stopping_rounds: 20
+    max_depth: 6
+    learning_rate: 0.08
+    subsample: 0.8
+    dividend_rules_mode: true
+    data_suffix: _with_fundamentals
+
 report_targets:
   v1:
     report_ann_return: 0.0797

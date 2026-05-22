@@ -4,6 +4,7 @@ from typing import Optional
 
 import numpy as np
 import pandas as pd
+from scipy.stats import norm as _norm
 
 from . import DATA_DIR
 from .load import PERMNO_COL, DATE_COL
@@ -103,6 +104,31 @@ def build_div_event_features(div_ev: pd.DataFrame, recent_n: int = 3) -> pd.Data
         .reset_index(level=0, drop=True)
     )
 
+    # A1a: div_amt_incr_streak — 连续严格增长次数（比 div_no_cut_streak 更严格）
+    def _incr_streak(s: pd.Series) -> pd.Series:
+        result = []
+        streak = 0
+        prev_val = np.nan
+        for val in s:
+            result.append(float(streak))
+            if pd.notna(val) and pd.notna(prev_val):
+                streak = streak + 1 if val > prev_val else 0
+            prev_val = val
+        return pd.Series(result, index=s.index)
+
+    ev["div_amt_incr_streak"] = (
+        g["DIVAMT"].apply(_incr_streak)
+        .reset_index(level=0, drop=True)
+    )
+
+    # A1b: div_amt_growth_rate_4q — 近4次分红的每次平均增速
+    # = (DIVAMT / DIVAMT_4q_ago)^(1/4) - 1，用 shift(1) 保持因果安全
+    ev["_amt_4q_ago"] = g["DIVAMT"].shift(4)
+    ev["div_amt_growth_rate_4q"] = (
+        (ev["DIVAMT"].shift(1) / (ev["_amt_4q_ago"].shift(1).abs() + 1e-8)) ** 0.25 - 1.0
+    ).clip(-1.0, 1.0)   # 截断极端值
+    ev = ev.drop(columns=["_amt_4q_ago"])
+
     # ── EXDT 时间结构特征 ─────────────────────────────────────────────
     # decl_to_exdt_days：申报日到除息日的天数（先算列，再用 groupby）
     ev["decl_to_exdt_days"] = (ev["EXDT"] - ev["DCLRDT"]).dt.days
@@ -123,6 +149,8 @@ def build_div_event_features(div_ev: pd.DataFrame, recent_n: int = 3) -> pd.Data
         # DIVAMT 金额
         "div_amt_last", "div_amt_mean_exp", "div_amt_chg",
         "div_amt_dir_mean_r3", "div_no_cut_streak",
+        # A1: 金额成长特征
+        "div_amt_incr_streak", "div_amt_growth_rate_4q",
         # EXDT 时间结构
         "decl_to_exdt_days", "decl_to_exdt_mean_exp",
     ]
@@ -193,12 +221,27 @@ def build_causal_features_full(
     df["time_to_mean_rN"] = df["days_since_last_div"] - df["gap_mean_rN"]
     df["z_to_mean_rN"]    = df["time_to_mean_rN"] / (df["gap_std_rN"] + eps)
 
+    # A3: renewal_prob_10d — 条件概率：已知未分红 d 天，未来 10 天内分红的概率
+    # 假设 gap ~ N(mu, sigma)，计算 P(d < gap <= d+10) / P(gap > d)
+    _d   = df["days_since_last_div"].to_numpy(dtype=float)
+    _mu  = df["gap_mean_exp"].to_numpy(dtype=float)
+    _sig = (df["gap_std_exp"] + eps).to_numpy(dtype=float)
+    _z_lo = (_d       - _mu) / _sig
+    _z_hi = (_d + 10. - _mu) / _sig
+    _surv = 1.0 - _norm.cdf(_z_lo)
+    _prob = (_norm.cdf(_z_hi) - _norm.cdf(_z_lo)) / (_surv + eps)
+    df["renewal_prob_10d"] = np.clip(_prob, 0.0, 1.0)
+
     # ── 4) 价格/成交/收益 rolling 特征 ───────────────────────────────
     g = df.groupby(PERMNO_COL, sort=False)
 
     df["log_mkt_cap"]  = np.log(df["DlyPrc"].abs() * df["ShrOut"] + 1)
     df["ret_5d"]       = g["DlyRet"].transform(lambda s: s.rolling(5).sum())
     df["ret_21d"]      = g["DlyRet"].transform(lambda s: s.rolling(21).sum())
+    df["ret_63d"]      = g["DlyRet"].transform(lambda s: s.rolling(63).sum())
+    df["ret_126d"]     = g["DlyRet"].transform(lambda s: s.rolling(126).sum())
+    # 12-1 month momentum: cumulative return from 252 to 21 days ago (Jegadeesh-Titman)
+    df["mom_12_1"]     = g["DlyRet"].transform(lambda s: s.shift(21).rolling(231, min_periods=126).sum())
     df["vol_5d"]       = g["DlyRet"].transform(lambda s: s.rolling(5).std())
     df["vol_21d"]      = g["DlyRet"].transform(lambda s: s.rolling(21).std())
 
@@ -259,6 +302,13 @@ def build_causal_features_full(
     df["ind_avg_ret"]    = df.groupby(["industry", DATE_COL])["DlyRet"].transform("mean")
     df["ret_rel_to_ind"] = df["DlyRet"] - df["ind_avg_ret"]
 
+    # A2: z_timing_rank_in_ind — 同行业+同日内，z_to_mean_rN 的百分位排名
+    # 越高说明该股在行业内越"临近分红日"，是截面相对信号
+    df["z_timing_rank_in_ind"] = (
+        df.groupby(["industry", DATE_COL])["z_to_mean_rN"]
+        .rank(pct=True, na_option="keep")
+    )
+
     # ── 8) 缺失值填充 ─────────────────────────────────────────────────
     df["has_div_history"] = df["div_count_exp"].notna().astype("int8")
     df["div_count_exp"]   = df["div_count_exp"].fillna(0).astype("int16")
@@ -268,7 +318,9 @@ def build_causal_features_full(
     for col in [
         "div_amt_last", "div_amt_mean_exp", "div_amt_chg",
         "div_amt_dir_mean_r3", "div_no_cut_streak",
+        "div_amt_incr_streak", "div_amt_growth_rate_4q",
         "decl_to_exdt_days", "decl_to_exdt_mean_exp",
+        "renewal_prob_10d", "z_timing_rank_in_ind",
     ]:
         if col in df.columns:
             df[col] = df[col].fillna(0.0)

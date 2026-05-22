@@ -497,6 +497,9 @@ def main() -> None:
 
     # 鈹€鈹€ 涓荤瓥鐣?鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
     logger.info("building strategy candidates")
+    z_early_threshold = bt_cfg.get("z_early_threshold", None)
+    if z_early_threshold is not None:
+        z_early_threshold = float(z_early_threshold)
     strategy_pool = prepare_candidate_pool(
         panel=panel,
         stable_gap_cv_threshold=stable_gap_cv_threshold,
@@ -507,12 +510,13 @@ def main() -> None:
         stable_prob_threshold=float(bt_cfg.get("stable_prob_threshold", 0.45)),
         regular_prob_threshold=float(bt_cfg.get("regular_prob_threshold", 0.55)),
         use_dividend_rules=use_dividend_rules,
+        z_early_threshold=z_early_threshold,
     )
     candidates = select_top_k_from_pool(
         pool=strategy_pool,
         top_k=int(bt_cfg["top_k"]),
         max_industry_weight=float(bt_cfg.get("max_industry_weight", 1.0)),
-        ranking_mode="prob",
+        ranking_mode=bt_cfg.get("ranking_mode", "prob"),
     )
     eligible_mask = pd.to_numeric(strategy_pool.get("eligible"), errors="coerce").fillna(0).astype(bool)
     logger.info(
@@ -586,6 +590,7 @@ def main() -> None:
         use_bid_ask_spread=bool(bt_cfg.get("use_bid_ask_spread", False)),
         spread_cost_cap_bps_one_way=float(bt_cfg.get("spread_cost_cap_bps_one_way", 100.0)),
         weighting=args.weighting,
+        extend_on_reentry=bool(bt_cfg.get("extend_on_reentry", False)),
         reset_active_at=args.reset_active_at,
     )
     daily_df = enrich_daily_report(daily_df, benchmark_df)

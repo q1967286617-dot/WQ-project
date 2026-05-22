@@ -257,6 +257,7 @@ def prepare_candidate_pool(
     regular_prob_threshold: float,
     use_dividend_rules: bool,
     require_prob_thresholds: bool = True,
+    z_early_threshold: float | None = None,
 ) -> pd.DataFrame:
     x = panel.copy().sort_values(["date", "prob"], ascending=[True, False]).reset_index(drop=True)
     turnover_threshold = x.groupby("date")["turnover_5d"].quantile(turnover_quantile_min).rename("turnover_threshold")
@@ -289,6 +290,10 @@ def prepare_candidate_pool(
         x["passes_dividend_rule"] = x["prob"] >= regular_prob_threshold
         x["eligible"] = x["tradable"] & x["passes_dividend_rule"] if require_prob_thresholds else x["tradable"]
 
+    if z_early_threshold is not None:
+        z_vals = pd.to_numeric(x["z_to_med_exp"], errors="coerce")
+        x["eligible"] = x["eligible"] & z_vals.lt(float(z_early_threshold))
+
     return x
 
 
@@ -313,7 +318,19 @@ def select_top_k_from_pool(
         counts: Dict[str, int] = {}
         day = g.copy()
 
-        if ranking_mode == "prob":
+        if ranking_mode == "early_prob":
+            # Composite score: prob + 0.15 bonus for early-cycle candidates (z < -1.5)
+            # Keeps same candidate pool but prefers early-announcement signals at equal prob
+            z_vals = pd.to_numeric(day.get("z_to_med_exp"), errors="coerce").fillna(0)
+            day["_composite"] = pd.to_numeric(day["prob"], errors="coerce").fillna(0) + \
+                                 (z_vals < -1.5).astype(float) * 0.15
+            ranked = day.sort_values(["_composite", "permno"], ascending=[False, True])
+        elif ranking_mode == "return_score":
+            # Rank by regressor's expected-return score; prob still used for pool filtering.
+            reg_score = pd.to_numeric(day.get("score_reg"), errors="coerce").fillna(-np.inf)
+            day["_return_score"] = reg_score
+            ranked = day.sort_values(["_return_score", "permno"], ascending=[False, True])
+        elif ranking_mode == "prob":
             ranked = day.sort_values(["prob", "permno"], ascending=[False, True])
         elif ranking_mode == "random":
             day["_rand"] = rng.random(len(day))

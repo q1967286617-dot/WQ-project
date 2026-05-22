@@ -15,6 +15,9 @@ num_cols:
   - log_mkt_cap
   - ret_5d
   - ret_21d
+  - ret_63d
+  - ret_126d
+  - mom_12_1
   - vol_5d
   - vol_21d
   - turnover_5d
@@ -37,6 +40,9 @@ num_cols:
   - time_to_mean_rN
   - z_to_mean_rN
   - div_count_exp
+  # A2/A3: 节奏精细化特征
+  - renewal_prob_10d
+  - z_timing_rank_in_ind
   # 日历周期编码
   - weekday_sin
   - weekday_cos
@@ -50,6 +56,9 @@ num_cols:
   - div_amt_chg
   - div_amt_dir_mean_r3
   - div_no_cut_streak
+  # A1: 金额成长特征
+  - div_amt_incr_streak
+  - div_amt_growth_rate_4q
   # EXDT 时间结构特征（新增）
   - decl_to_exdt_days
   - decl_to_exdt_mean_exp
@@ -64,6 +73,21 @@ num_cols:
   - bid_ask_spread_5d
   - log_num_trd
   - num_trd_spike
+  # Compustat基本面特征
+  - roe
+  - leverage
+  - profit_margin
+  - payout_ratio
+  - div_coverage
+  - dvpsxq
+  # 宏观市场特征（crsp.dsi + FRED）
+  - mkt_ret_5d
+  - mkt_ret_21d
+  - mkt_ret_63d
+  - mkt_vol_21d
+  - mkt_vol_63d
+  - vix
+  - dgs10
 
 cat_cols:
   - quarter

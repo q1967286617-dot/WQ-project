@@ -36,12 +36,15 @@ def simulate_portfolio(
     use_bid_ask_spread: bool = False,
     spread_cost_cap_bps_one_way: float | None = None,
     weighting: str = "equal",  # "equal" or "prob_weight"
+    extend_on_reentry: bool = False,
     reset_active_at: pd.Timestamp | str | None = None,
 ) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     """
     weighting="equal"       : equal weight 1/top_k per position (default, original behaviour)
     weighting="prob_weight" : softmax over active positions' entry prob each day, weights sum to 1
-
+    extend_on_reentry=True  : if a position is scheduled to exit today but the same stock appears
+                              in tomorrow's planned entries, extend the hold by holding_td instead
+                              of closing and re-opening (saves the round-trip cost).
     reset_active_at: when set, clear `active` and `cooldown_until` dicts on
     the first panel date >= reset_active_at, before processing planned
     entries that day. Lets WF (panel starting at YYYY-01) and ST (panel
@@ -135,6 +138,24 @@ def simulate_portfolio(
 
         active_today = list(active.values())
         gross_ret = 0.0
+
+        # Position continuation: if a position would exit today AND the same stock
+        # appears in tomorrow's planned entries, extend instead of close+reopen.
+        if extend_on_reentry and idx + 1 < len(dates):
+            next_dt = dates[idx + 1]
+            next_planned = planned_entries.get(next_dt, [])
+            next_permnos = {int(r["permno"]) for r in next_planned}
+            continued_permnos: set = set()
+            for pos in active_today:
+                if pos.active_end_idx == idx and pos.permno in next_permnos:
+                    new_end = min(idx + holding_td, int(last_idx_by_permno.get(pos.permno, idx)))
+                    pos.active_end_idx = new_end
+                    pos.planned_active_end_idx = idx + holding_td
+                    continued_permnos.add(pos.permno)
+            if continued_permnos:
+                planned_entries[next_dt] = [r for r in next_planned
+                                            if int(r["permno"]) not in continued_permnos]
+
         exit_positions = [p for p in active_today if p.active_end_idx == idx]
 
         # --- compute position weights for this day ---
