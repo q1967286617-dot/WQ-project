@@ -37,6 +37,7 @@ def simulate_portfolio(
     spread_cost_cap_bps_one_way: float | None = None,
     weighting: str = "equal",  # "equal" or "prob_weight"
     extend_on_reentry: bool = False,
+    reset_active_at: pd.Timestamp | str | None = None,
 ) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     """
     weighting="equal"       : equal weight 1/top_k per position (default, original behaviour)
@@ -44,6 +45,14 @@ def simulate_portfolio(
     extend_on_reentry=True  : if a position is scheduled to exit today but the same stock appears
                               in tomorrow's planned entries, extend the hold by holding_td instead
                               of closing and re-opening (saves the round-trip cost).
+    reset_active_at: when set, clear `active` and `cooldown_until` dicts on
+    the first panel date >= reset_active_at, before processing planned
+    entries that day. Lets WF (panel starting at YYYY-01) and ST (panel
+    starting earlier) be compared fairly on the post-reset window: both
+    enter the reset day with no carry-in positions, so the path-dependent
+    active-state cascade is equalised. Existing positions at reset are
+    dropped without recording exit trades/costs (their P&L up to that
+    point is already in daily_portfolio).
     """
     x = panel.copy().sort_values(["date", "permno"]).reset_index(drop=True)
     x["date"] = pd.to_datetime(x["date"], errors="coerce")
@@ -61,6 +70,9 @@ def simulate_portfolio(
     spread_cap = None if spread_cost_cap_bps_one_way is None else float(spread_cost_cap_bps_one_way) / 10000.0
     cap_names = max(1, int(np.floor(max_industry_weight * top_k))) if max_industry_weight > 0 else top_k
 
+    reset_ts = pd.to_datetime(reset_active_at) if reset_active_at is not None else None
+    reset_done = False
+
     active: Dict[int, ActivePosition] = {}
     cooldown_until: Dict[int, int] = {}
     trade_rows: List[Dict] = []
@@ -68,6 +80,10 @@ def simulate_portfolio(
     daily_rows: List[Dict] = []
 
     for idx, dt in enumerate(dates):
+        if reset_ts is not None and not reset_done and dt >= reset_ts:
+            active.clear()
+            cooldown_until.clear()
+            reset_done = True
         entries_today: List[ActivePosition] = []
         industry_counts = _industry_counts(active)
         available_permnos = day_permnos.get(dt, set())

@@ -115,6 +115,7 @@ def main():
         dval=dval,
         pos=pos,
         neg=neg,
+        seed=int(args.seed),
         max_depth=hyperparams['max_depth'],
         learning_rate=hyperparams['learning_rate'],
         subsample=hyperparams.get('subsample', 0.8),
