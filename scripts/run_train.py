@@ -122,7 +122,6 @@ def main():
         num_boost_round=hyperparams['num_boost_round'],
         early_stopping_rounds=hyperparams['early_stopping_rounds'],
         verbose_eval=50,
-        seed=args.seed,
     )
 
     art = TrainArtifacts(
