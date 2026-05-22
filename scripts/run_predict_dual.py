@@ -91,6 +91,14 @@ def main():
         help="Fusion weight on classifier rank. 1.0 = pure cls, 0.0 = pure reg.",
     )
     ap.add_argument(
+        "--fusion_mode",
+        choices=["linear", "separate"],
+        default="linear",
+        help="'linear': prob = alpha*rank_cls + (1-alpha)*rank_reg (default). "
+             "'separate': prob = raw score_cls (for filtering), score_reg kept as "
+             "separate ranking column; use with ranking_mode=return_score in backtest.",
+    )
+    ap.add_argument(
         "--out_suffix",
         default=None,
         help="Optional suffix for the preds file, e.g. '_alpha05'. "
@@ -143,7 +151,14 @@ def main():
     # Cross-sectional rank normalization per trading day (pct rank in [0, 1])
     eval_df["rank_cls"] = eval_df.groupby("date")["score_cls"].rank(method="average", pct=True)
     eval_df["rank_reg"] = eval_df.groupby("date")["score_reg"].rank(method="average", pct=True)
-    eval_df["prob"] = args.alpha * eval_df["rank_cls"] + (1.0 - args.alpha) * eval_df["rank_reg"]
+
+    if args.fusion_mode == "separate":
+        # prob = raw classifier probability (for threshold filtering, same calibration as baseline)
+        # score_reg stays as a separate column for ranking_mode=return_score in backtest
+        eval_df["prob"] = eval_df["score_cls"]
+        logger.info("fusion_mode=separate: prob=score_cls (raw), score_reg kept for ranking")
+    else:
+        eval_df["prob"] = args.alpha * eval_df["rank_cls"] + (1.0 - args.alpha) * eval_df["rank_reg"]
 
     # Cohort columns used by downstream diagnostics
     keep = ["log_mkt_cap", "turnover_5d", "vol_21d", "SICCD", "industry", "has_div_history"]

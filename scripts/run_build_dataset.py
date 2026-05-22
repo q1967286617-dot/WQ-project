@@ -71,6 +71,27 @@ def main() -> None:
 
     logger.info(f"saved splits: {train_path}, {val_path}, {test_path}")
 
+    # Merge Compustat fundamental features from pre-built files if available.
+    # Uses PERMNO + DlyCalDt as join key — no re-download needed.
+    FUND_COLS = ["roe", "payout_ratio", "div_coverage", "dvpsxq", "leverage", "profit_margin"]
+    for split_name, df_split, out_path in [
+        ("train", train_df, train_path),
+        ("val",   val_df,   val_path),
+        ("test",  test_df,  test_path),
+    ]:
+        fund_path = paths.processed_dir / f"{split_name}_with_fundamentals.parquet"
+        if not fund_path.exists():
+            logger.warning(f"fundamentals not found for {split_name}: {fund_path} — skipping merge")
+            continue
+        fund_df = __import__("pandas").read_parquet(fund_path, columns=["PERMNO", "DlyCalDt"] + FUND_COLS)
+        fund_df["PERMNO"] = fund_df["PERMNO"].astype(int)
+        df_split = df_split.copy()
+        df_split["PERMNO"] = df_split["PERMNO"].astype(int)
+        merged = df_split.merge(fund_df, on=["PERMNO", "DlyCalDt"], how="left")
+        merged.to_parquet(out_path, index=False)
+        cover = merged[FUND_COLS].notna().mean().mean()
+        logger.info(f"{split_name}: merged fundamentals, coverage={cover:.3f}, shape={merged.shape}")
+
 
 if __name__ == "__main__":
     main()

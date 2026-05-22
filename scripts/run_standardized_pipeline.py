@@ -207,6 +207,7 @@ def main() -> None:
     parser.add_argument("--force_predict", action="store_true")
     parser.add_argument("--force_eval", action="store_true")
     parser.add_argument("--force_backtest", action="store_true")
+    parser.add_argument("--seed", type=int, default=None, help="Override random seed for training and backtest")
     args = parser.parse_args()
 
     registry_path = PROJECT_ROOT / args.version_registry
@@ -243,7 +244,16 @@ def main() -> None:
     )
 
     model_artifact = paths.models_dir / f"xgb_{args.run_id}.joblib"
+    if args.seed is not None:
+        import yaml as _yaml
+        bt_cfg = load_yaml(backtest_cfg_path)
+        bt_cfg["random_seed"] = args.seed
+        with backtest_cfg_path.open("w", encoding="utf-8") as _f:
+            _yaml.safe_dump(bt_cfg, _f, allow_unicode=True, sort_keys=False)
+
     train_cmd = ["python", "scripts/run_train.py", "--run_id", args.run_id, "--model_cfg", str(model_cfg_path)]
+    if args.seed is not None:
+        train_cmd += ["--seed", str(args.seed)]
     if spec.data_suffix:
         train_cmd += ["--data_suffix", spec.data_suffix]
     if spec.tradability_weight:

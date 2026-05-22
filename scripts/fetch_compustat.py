@@ -53,6 +53,8 @@ compq = db.raw_sql("""
       AND ceqq IS NOT NULL
 """, date_cols=["datadate", "rdq"])
 db.close()
+compq.to_csv("data/raw/compustat_raw.csv", index=False)
+print(f"  Compustat raw data saved → data/raw/compustat_raw.csv")
 print(f"  Compustat rows: {len(compq):,}")
 
 # ── 4. Build features ─────────────────────────────────────────────────────────
