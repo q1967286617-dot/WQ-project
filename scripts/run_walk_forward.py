@@ -86,6 +86,10 @@ def main() -> None:
                          "using the first fold's model. Lets simulate_portfolio plan "
                          "carry-in entries that mirror what single-train backtest sees, "
                          "removing first-fold boundary bias. Recommend ~30 (>= holding_td days).")
+    ap.add_argument("--capture_val_preds", action="store_true",
+                    help="Also run predict on each fold's val split and concatenate to "
+                         "outputs/<combined_id>/preds/val_preds.parquet. Needed for "
+                         "per-fold parameter sweep (run_wf_param_sweep.py).")
     args = ap.parse_args()
 
     paths_cfg = load_yaml(Path(args.paths))
@@ -116,6 +120,7 @@ def main() -> None:
 
     fold_summaries: list[dict] = []
     test_preds_parts: list[pd.DataFrame] = []
+    val_preds_parts:  list[pd.DataFrame] = []
 
     for fold in folds:
         logger.info(f"=== fold {fold.fold_id} ===")
@@ -155,6 +160,24 @@ def main() -> None:
         if rc != 0:
             logger.error(f"  predict failed (rc={rc})")
             raise SystemExit(rc)
+
+        if args.capture_val_preds:
+            rc = _run_subprocess([PY, "scripts/run_predict.py",
+                                  "--paths", args.paths,
+                                  "--run_id", fold_run_id,
+                                  "--split", "val",
+                                  "--data_suffix", fold_suffix],
+                                 log_dir / f"{fold.fold_id}_predict_val.log")
+            if rc != 0:
+                logger.warning(f"  val predict failed (rc={rc}); skipping val preds for {fold.fold_id}")
+            else:
+                val_preds_path = outputs_dir / fold_run_id / "preds" / "val_preds.parquet"
+                if val_preds_path.exists():
+                    vp = pd.read_parquet(val_preds_path)
+                    vp["date"] = pd.to_datetime(vp["date"], errors="coerce")
+                    vmask = (vp["date"] >= pd.to_datetime(fold.val_start)) & (vp["date"] <= pd.to_datetime(fold.val_end))
+                    val_preds_parts.append(vp[vmask].copy())
+                    logger.info(f"  val preds captured: {vmask.sum()} rows")
 
         preds_path = outputs_dir / fold_run_id / "preds" / "test_preds.parquet"
         if not preds_path.exists():
@@ -222,6 +245,13 @@ def main() -> None:
     combined_preds_path = combined_run_dir / "preds" / "test_preds.parquet"
     combined_preds.to_parquet(combined_preds_path, index=False)
     logger.info(f"wrote combined preds: {combined_preds_path}  rows={len(combined_preds)}")
+
+    if val_preds_parts:
+        combined_val = pd.concat(val_preds_parts, ignore_index=True)
+        combined_val = combined_val.drop_duplicates(subset=["date", "permno"], keep="last").sort_values(["permno", "date"]).reset_index(drop=True)
+        combined_val_path = combined_run_dir / "preds" / "val_preds.parquet"
+        combined_val.to_parquet(combined_val_path, index=False)
+        logger.info(f"wrote combined val preds: {combined_val_path}  rows={len(combined_val)}")
 
     (combined_run_dir / "folds.json").write_text(
         json.dumps({"folds": fold_summaries}, indent=2, ensure_ascii=False), encoding="utf-8"
